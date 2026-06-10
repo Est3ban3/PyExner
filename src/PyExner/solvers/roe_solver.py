@@ -27,7 +27,7 @@ def config_fn_roe(state, mpi_handler, boundaries, dx, params):
     )
 
 
-def init_fn_roe(state: RoeState, config: SolverConfig) -> RoeState:
+def init_fn_roe(state: RoeState, mask, config: SolverConfig) -> RoeState:
 
     h = config.halo_exchange(state.h)
     hu = config.halo_exchange(state.hu)
@@ -37,8 +37,8 @@ def init_fn_roe(state: RoeState, config: SolverConfig) -> RoeState:
 
     return RoeState(h=h, hu=hu, hv=hv, z=z, n=n)
 
-@partial(jax.jit, static_argnums=(3,))
-def step_fn_roe(state: RoeState, time: float, dt: float, config: SolverConfig) -> RoeState:    
+@partial(jax.jit, static_argnums=(4,))
+def step_fn_roe(state: RoeState, time: float, dt: float, mask, config: SolverConfig) -> RoeState:    
     new_state = roe_solve_2D(state, dt, config.dx)
 
     # Update halos

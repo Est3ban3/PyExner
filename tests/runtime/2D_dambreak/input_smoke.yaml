@@ -1,0 +1,56 @@
+end_time: 0.2
+out_freq: 1.1
+io_freq: 1.1
+cfl: 0.5
+flux_scheme: Roe Exner
+integrator: Forward Euler
+parNx: 1
+parNy: 4
+initial_conditions: input.nc
+Lx: 2
+dh: 0.05
+
+erosion:
+  grass_factor: 0.01
+
+boundaries:
+
+  outlet1:
+    type: Reflective
+    polygon:
+      - [-2.05, -2.05]
+      - [-1.95, -2.05]
+      - [-1.95,  2.05]
+      - [-2.05,  2.05]
+    values: [0.0, 0.0, 0.0, 0.0]
+    normal: [-1.0, 0.0]
+
+  outlet2:
+    type: Reflective
+    polygon:
+      - [ 1.95, -2.05]
+      - [ 2.05, -2.05]
+      - [ 2.05,  2.05]
+      - [ 1.95,  2.05]
+    values: [0.0, 0.0, 0.0, 0.0]
+    normal: [1.0, 0.0]
+
+  outlet3:
+    type: Reflective
+    polygon:
+      - [-2.05, -2.05]
+      - [ 2.05, -2.05]
+      - [ 2.05, -1.95]
+      - [-2.05, -1.95]
+    values: [0.0, 0.0, 0.0, 0.0]
+    normal: [0.0, -1.0]
+
+  outlet4:
+    type: Reflective
+    polygon:
+      - [-2.05,  1.95]
+      - [ 2.05,  1.95]
+      - [ 2.05,  2.05]
+      - [-2.05,  2.05]
+    values: [0.0, 0.0, 0.0, 0.0]
+    normal: [0.0, 1.0]

@@ -9,7 +9,8 @@ from .boundaries import (
     RoeExner_BerthonBoundary,
     RoeExner_NormalFlowDepthBoundary,
     RoeExner_SteepFall,
-    RoeExner_TransmissiveBedBoundary
+    RoeExner_TransmissiveBedBoundary,
+    EPB_TransmissiveBoundary
 
 )
 
@@ -23,5 +24,6 @@ __all__ = [
     "RoeExner_BerthonBoundary",
     "RoeExner_NormalFlowDepthBoundary",
     "RoeExner_SteepFall",
-    "RoeExner_TransmissiveBedBoundary"
+    "RoeExner_TransmissiveBedBoundary",
+    "EPB_TransmissiveBoundary"
 ]

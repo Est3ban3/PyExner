@@ -1,0 +1,33 @@
+end_time: 0.5
+out_freq: 1000.0
+cfl: 0.5
+flux_scheme: Roe
+integrator: Forward Euler
+parNx: 1
+parNy: 1
+input_file: input_gif.nc
+output_file: output_ref.nc
+dh: 0.33445
+
+boundaries:
+
+  inlet:
+    type: Transmissive
+    polygon: [[-0.1,-0.1],[0.1,-0.1],[0.1,100.1],[-0.1,100.1]]
+    values: [0.0,0.0,0.0,0.0]
+    normal: [-1.0,0.0]
+  outlet:
+    type: Transmissive
+    polygon: [[99.9,-0.1],[100.1,-0.1],[100.1,100.1],[99.9,100.1]]
+    values: [0.0,0.0,0.0,0.0]
+    normal: [1.0,0.0]
+  bottom:
+    type: Transmissive
+    polygon: [[-0.1,-0.1],[100.1,-0.1],[100.1,0.1],[-0.1,0.1]]
+    values: [0.0,0.0,0.0,0.0]
+    normal: [0.0,-1.0]
+  top:
+    type: Transmissive
+    polygon: [[-0.1,99.9],[100.1,99.9],[100.1,100.1],[-0.1,100.1]]
+    values: [0.0,0.0,0.0,0.0]
+    normal: [0.0,1.0]

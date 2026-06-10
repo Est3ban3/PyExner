@@ -9,6 +9,7 @@ from .roeexner_berthon import RoeExner_BerthonBoundary
 from .roeexner_normalflowdepth import RoeExner_NormalFlowDepthBoundary
 from .roeexner_steepfall import RoeExner_SteepFall
 from .roeexner_transmissivebed import RoeExner_TransmissiveBedBoundary
+from .epb_transmissive import EPB_TransmissiveBoundary
 
 __all__ = [
     "Roe_ReflectiveBoundary", 
@@ -21,6 +22,7 @@ __all__ = [
     "RoeExner_BerthonBoundary",
     "RoeExner_NormalFlowDepthBoundary",
     "RoeExner_SteepFall",
-    "RoeExner_TransmissiveBedBoundary"
+    "RoeExner_TransmissiveBedBoundary",
+    "EPB_TransmissiveBoundary"
 ]
 

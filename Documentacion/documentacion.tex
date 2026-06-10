@@ -1,0 +1,783 @@
+\documentclass[11pt,a4paper]{article}
+
+\usepackage[a4paper,margin=2.5cm]{geometry}
+\usepackage{lmodern}
+\usepackage[spanish,es-nodecimaldot]{babel}
+\usepackage{microtype}
+\usepackage{amsmath,amssymb}
+\usepackage{booktabs}
+\usepackage{array}
+\usepackage{longtable}
+\usepackage{tabularx}
+\usepackage{enumitem}
+\usepackage{hyperref}
+\usepackage{xurl}
+\usepackage{fancyvrb}
+\usepackage{titlesec}
+
+\hypersetup{
+  colorlinks=true,
+  linkcolor=black,
+  urlcolor=blue,
+  pdftitle={PyExner - Documentacion de Arquitectura}
+}
+
+\setlength{\parindent}{0pt}
+\setlength{\parskip}{0.6em}
+\setlength{\emergencystretch}{3em}
+
+\titleformat{\section}{\large\bfseries}{\thesection.}{0.5em}{}
+\titleformat{\subsection}{\normalsize\bfseries}{\thesubsection.}{0.5em}{}
+\titleformat{\subsubsection}{\normalsize\bfseries}{\thesubsubsection.}{0.5em}{}
+
+\newcolumntype{L}[1]{>{\raggedright\arraybackslash}p{#1}}
+\newcolumntype{C}[1]{>{\centering\arraybackslash}p{#1}}
+\newcolumntype{Y}{>{\raggedright\arraybackslash}X}
+
+\newcommand{\code}[1]{\texttt{#1}}
+\newcommand{\pathref}[1]{\href{#1}{\texttt{#1}}}
+
+\begin{document}
+
+\begin{center}
+  {\LARGE \textbf{PyExner}}\\[0.4em]
+  {\Large Documentacion de Arquitectura}
+\end{center}
+
+\section{Vision general}
+
+\textbf{PyExner} es un solver 2D de alto rendimiento para las ecuaciones de aguas someras\newline
+(\emph{Shallow Water Equations}, SWE) acopladas con la ecuacion de Exner para transporte de\newline
+sedimentos y evolucion morfodinamica del lecho. El codigo esta construido sobre \textbf{JAX} para
+aceleracion en GPU y utiliza \textbf{MPI} mediante \code{mpi4py} y \code{mpi4jax} para computacion
+distribuida en multiples GPUs o nodos.
+
+\subsection{Ecuaciones que resuelve}
+
+El sistema matematico que PyExner resuelve combina dos fenomenos fisicos: el flujo de agua poco
+profunda y la evolucion del lecho por arrastre de sedimento.
+
+\begin{enumerate}[leftmargin=1.8em]
+  \item \textbf{Ecuaciones de aguas someras (SWE).}
+  Estas ecuaciones describen la conservacion de masa y de momento lineal para un fluido cuya
+  profundidad es mucho menor que su extension horizontal. Se obtienen al integrar las ecuaciones
+  de Navier-Stokes en la vertical bajo la hipotesis de presion hidrostatica. En su forma
+  conservativa bidimensional resultan:
+
+  \begin{align*}
+    \frac{\partial h}{\partial t}
+    + \frac{\partial (hu)}{\partial x}
+    + \frac{\partial (hv)}{\partial y} &= 0 \\
+    \frac{\partial (hu)}{\partial t}
+    + \frac{\partial}{\partial x}\left(hu^2 + \frac{1}{2}gh^2\right)
+    + \frac{\partial (huv)}{\partial y} &= -gh\frac{\partial z}{\partial x} - ghS_{f,x} \\
+    \frac{\partial (hv)}{\partial t}
+    + \frac{\partial (huv)}{\partial x}
+    + \frac{\partial}{\partial y}\left(hv^2 + \frac{1}{2}gh^2\right) &= -gh\frac{\partial z}{\partial y} - ghS_{f,y}
+  \end{align*}
+
+  donde $h$ es la profundidad del agua, $u$ y $v$ las componentes de velocidad,
+  $g$ la aceleracion de la gravedad, $z$ la cota del lecho y $S_{f}$ la pendiente de friccion
+  (modelada con la ley de Manning).
+
+  \item \textbf{Ecuacion de Exner.}
+  Describe la evolucion temporal de la cota del lecho erodible $z_b$ como resultado del
+  transporte de sedimento de fondo $\mathbf{q_b}$. El factor $1/(1-p)$ corrige por la
+  porosidad $p$ de la mezcla granular:
+
+  \[
+    \frac{\partial z_b}{\partial t} + \frac{1}{1-p}\nabla \cdot \mathbf{q_b} = 0
+  \]
+\end{enumerate}
+
+\subsection{Stack tecnologico}
+
+La eleccion de JAX como motor de computo permite compilar funciones numericas a codigo
+nativo de GPU (o CPU) mediante \code{jax.jit}, lo que evita la sobrecarga del interprete
+de Python en cada iteracion del bucle temporal. La compatibilidad de JAX con
+diferenciacion automatica abre, ademas, la puerta a futuros estudios de sensibilidad o
+optimizacion adjunta. Para simulaciones de gran escala, el dominio se descompone
+espacialmente entre multiples procesos MPI, cada uno con acceso a su propia GPU; la biblioteca
+\code{mpi4jax} integra las comunicaciones MPI directamente dentro de las funciones
+JIT-compiladas.
+
+\begin{tabularx}{\textwidth}{L{4.2cm}Y}
+\toprule
+Componente & Tecnologia \\
+\midrule
+Computo numerico & JAX (\code{jax}, \code{jax.numpy}) \\
+Paralelismo distribuido & MPI (\code{mpi4py}, \code{mpi4jax}) \\
+I/O paralelo & PnetCDF (\code{pnetcdf}) \\
+Configuracion & YAML (\code{pyyaml}) \\
+Visualizacion & Matplotlib, xarray \\
+\bottomrule
+\end{tabularx}
+
+\section{Punto de entrada: \code{run\_driver()}}
+
+\textbf{Archivo:} \code{src/PyExner/runtime/driver.py}
+
+La funcion principal orquesta toda la simulacion. Actua como punto unico de entrada: recibe la ruta
+al archivo de configuracion YAML, inicializa todos los subsistemas en el orden correcto y lanza el
+bucle temporal. Su flujo logico es el siguiente:
+
+\begin{Verbatim}[fontsize=\small]
+config YAML -> Parallel (MPI) -> PnetCDF I/O -> Mesh -> State -> Boundaries -> Solver 
+-> Integrator -> Ejecucion
+\end{Verbatim}
+
+\subsection{Pasos detallados}
+
+\begin{enumerate}[leftmargin=1.8em]
+  \item Lee el archivo YAML de configuracion mediante \code{config\_path}.
+  \item Inicializa MPI mediante \code{Parallel(params)} y crea la topologia cartesiana.
+  \item Crea el lector PnetCDF para abrir archivos de entrada y salida en paralelo.
+  \item Genera la malla con \code{pnetcdf\_io.generate\_mesh()}.
+  \item Crea el estado vacio segun el esquema de flujo, \code{Roe} o \code{Roe Exner}.
+  \item Lee las condiciones iniciales desde el archivo NetCDF hacia el estado.
+  \item Configura las condiciones de contorno mediante \code{BoundaryManager}.
+  \item Selecciona el solver desde \code{SOLVER\_REGISTRY}.
+  \item Selecciona el integrador temporal desde \code{INTEGRATOR\_REGISTRY}.
+  \item Ejecuta el bucle temporal mediante \code{integrator.run\_fn()}.
+\end{enumerate}
+
+\subsection{Parametros YAML principales}
+
+\begin{longtable}{L{3.2cm}L{8.2cm}L{3cm}}
+\toprule
+Parametro & Descripcion & Ejemplo \\
+\midrule
+\endhead
+\code{end\_time} & Tiempo final de simulacion & \code{20.0} \\
+\code{out\_freq} & Frecuencia de escritura de salida & \code{0.25} \\
+\code{cfl} & Numero de Courant-Friedrichs-Lewy. Controla el paso de tiempo para garantizar estabilidad numerica: valores cercanos a 1 son mas eficientes pero menos robustos & \code{0.5} \\
+\code{flux\_scheme} & Esquema numerico: \code{Roe} o \code{Roe Exner} & \code{Roe Exner} \\
+\code{integrator} & Esquema temporal: \code{Forward Euler} o \code{SSPRK2} & \code{Forward Euler} \\
+\code{parNx}, \code{parNy} & Particiones MPI en X e Y & \code{2}, \code{2} \\
+\code{input\_file} & Archivo NetCDF de entrada & \code{input.nc} \\
+\code{output\_file} & Archivo NetCDF de salida & \code{output.nc} \\
+\code{boundaries} & Definicion de condiciones de contorno & ver Seccion 6 \\
+\code{erosion} & Parametros de sedimentos para \code{Roe Exner} & ver Seccion 4 \\
+\bottomrule
+\end{longtable}
+
+\section{Modulo \code{state/}: variables de estado}
+
+\textbf{Directorio:} \code{src/PyExner/state/}
+
+El modulo \code{state/} define las variables conservativas que el solver transporta en cada celda
+de la malla. Se denominan \emph{conservativas} porque representan cantidades cuyo integral se
+conserva globalmente (masa de agua $h$, momento $hu$, $hv$), a diferencia de las variables
+\emph{primitivas} ($h$, $u$, $v$) que no satisfacen directamente las leyes de conservacion
+en forma de divergencia.
+
+\subsection{\code{BaseState}}
+
+\textbf{Archivo:} \code{src/PyExner/state/base.py}
+
+Clase base con los campos hidraulicos comunes:
+
+\begin{tabularx}{\textwidth}{L{3cm}L{3cm}Y}
+\toprule
+Campo & Tipo & Descripcion \\
+\midrule
+\code{h} & \code{jax.Array} & Profundidad del agua \\
+\code{hu} & \code{jax.Array} & Momento en X, es decir, $h \cdot u$ \\
+\code{hv} & \code{jax.Array} & Momento en Y, es decir, $h \cdot v$ \\
+\bottomrule
+\end{tabularx}
+
+Metodos utilitarios relevantes: \code{unshard()}, \code{\_\_getitem\_\_()}, \code{reshape()},
+\code{apply\_to\_all()} y \code{to\_host()}.
+
+\subsection{\code{RoeState}}
+
+\textbf{Archivo:} \code{src/PyExner/state/roe\_state.py}
+
+Este estado se utiliza para simulaciones solo hidraulicas.
+
+\begin{tabularx}{\textwidth}{L{4cm}Y}
+\toprule
+Campo adicional & Descripcion \\
+\midrule
+\code{z} & Elevacion del lecho fija (no cambia durante la simulacion) \\
+\code{n} & Coeficiente de rugosidad de Manning \\
+\bottomrule
+\end{tabularx}
+
+El coeficiente de Manning $n$ parametriza la resistencia al flujo que ejerce el lecho. Valores
+tipicos van de $\sim$0.01 para canales lisos a $\sim$0.05 para cauces naturales con vegetacion.
+
+Metodos principales: \code{empty(mesh)}, \code{from\_params(params)} y \code{replace(**kwargs)}.
+
+\subsection{\code{RoeExnerState}}
+
+\textbf{Archivo:} \code{src/PyExner/state/roe\_exner\_state.py}
+
+Este estado se utiliza para simulaciones hidrodinamicas y morfodinamicas acopladas. Distingue
+entre una capa de roca fija (\code{z}) y una capa de sedimento suelto (\code{z\_b}) que puede
+erosionarse o depositarse. La superficie del lecho que percibe el flujo es la suma de ambas.
+
+\begin{longtable}{L{3.4cm}L{11cm}}
+\toprule
+Campo adicional & Descripcion \\
+\midrule
+\endhead
+\code{z} & Elevacion del sustrato no erodible (roca base) \\
+\code{z\_b} & Elevacion del lecho erodible (capa de sedimento) \\
+\code{n} & Rugosidad de Manning original \\
+\code{n\_b} & Rugosidad efectiva calculada a partir de $d_{50}$ \\
+\code{G} & Factor de interaccion morfodinamica para la tasa de transporte \\
+\code{seds} & Propiedades de sedimentos: fraccion, diametro, densidad y afines \\
+\bottomrule
+\end{longtable}
+
+\subsection{Registro de estados}
+
+\textbf{Archivo:} \code{src/PyExner/state/registry.py}
+
+El sistema de registro usa decoradores:
+
+\begin{itemize}[leftmargin=1.6em]
+  \item \code{@register\_state(Roe)} registra \code{RoeState}.
+  \item \code{@register\_state(Roe Exner)} registra \code{RoeExnerState}.
+  \item \code{create\_empty\_state(name, mesh, rank)} crea un estado vacio por nombre.
+  \item \code{create\_state(name, params)} crea una instancia a partir de parametros.
+\end{itemize}
+
+\section{Modulo \code{solvers/}: solvers de Riemann}
+
+\textbf{Directorio:} \code{src/PyExner/solvers/}
+
+Un solver de Riemann calcula el flujo numerico en la interfaz entre dos celdas a partir de los
+estados a cada lado. Resuelve (de forma exacta o aproximada) el problema de Riemann, es decir,
+la evolucion de una discontinuidad inicial entre dos estados constantes. El resultado determina
+cuanto de cada variable conservativa pasa de una celda a la otra en un paso temporal.
+
+\subsection{Arquitectura del registro}
+
+\textbf{Archivo:} \code{src/PyExner/solvers/registry.py}
+
+Cada solver se registra como un \code{SolverBundle} con los siguientes campos:
+
+\begin{tabularx}{\textwidth}{L{3cm}L{3cm}Y}
+\toprule
+Campo & Tipo & Descripcion \\
+\midrule
+\code{name} & \code{str} & Nombre del solver \\
+\code{config} & \code{Callable} & Funcion de configuracion que crea \code{SolverConfig} \\
+\code{mask\_fn} & \code{Callable} & Genera mascaras de celdas activas o inactivas \\
+\code{init\_fn} & \code{Callable} & Inicializa el estado e intercambia halos \\
+\code{step\_fn} & \code{Callable} & Avanza un paso temporal \\
+\code{compute\_dt\_fn} & \code{Callable} & Calcula $\Delta t$ segun la condicion CFL \\
+\bottomrule
+\end{tabularx}
+
+\code{SolverConfig} contiene \code{mpi\_handler}, \code{boundaries}, \code{dx} y
+\code{halo\_exchange}.
+
+\subsection{Solver de Roe para SWE}
+
+\textbf{Archivo del solver:} \code{src/PyExner/solvers/roe\_solver.py}\\
+\textbf{Kernels numericos:} \code{src/PyExner/solvers/kernels/roe.py}
+
+Este solver resuelve las ecuaciones de aguas someras 2D sin evolucion del lecho.
+
+\subsubsection{Funcion principal: \code{roe\_solver(si, sj, nx, ny, dx)}}
+
+La funcion implementa el solver de Riemann aproximado de Roe en la interfaz entre dos celdas vecinas
+\code{si} y \code{sj}. El procedimiento puede resumirse asi:
+
+\begin{enumerate}[leftmargin=1.8em]
+  \item Rota las velocidades al marco normal-tangencial de la interfaz. Esto permite tratar
+  la interfaz como un problema unidimensional independiente de la orientacion de la malla.
+  \item Calcula los promedios de Roe. Son valores intermedios especialmente elegidos para que la
+  linializacion del flujo sea consistente con las relaciones de salto de Rankine-Hugoniot:
+  \[
+    \tilde{h} = \frac{1}{2}(h_i + h_j), \qquad
+    \tilde{u} = \frac{\sqrt{h_i}\hat{u}_i + \sqrt{h_j}\hat{u}_j}{\sqrt{h_i} + \sqrt{h_j}}, \qquad
+    \tilde{c} = \sqrt{g\tilde{h}}
+  \]
+  \item Obtiene los autovalores, que representan las velocidades de propagacion de las tres
+  familias de ondas del sistema (onda lenta, contacto y onda rapida):
+  \[
+    \lambda_1 = \tilde{u} - \tilde{c}, \qquad
+    \lambda_2 = \tilde{u}, \qquad
+    \lambda_3 = \tilde{u} + \tilde{c}
+  \]
+  \item Aplica la correccion de entropia de Harten-Hyman. Esta correccion evita que el esquema
+  produzca ondas de rarefaccion no fisicas (choques expansivos) cuando un autovalor se acerca
+  a cero; sustituye el valor absoluto $|\lambda|$ por una funcion suavizada en un entorno
+  del origen.
+  \item Construye los autovectores y la descomposicion modal. La matriz $P$ de autovectores
+  derechos permite descomponer el salto de estado $\Delta U$ en contribuciones independientes
+  de cada familia de ondas.
+  \item Calcula las ondas mediante $\boldsymbol{\alpha} = P^{-1}\Delta U$.
+  \item Incorpora terminos fuente \emph{well-balanced}. Un esquema se llama
+  \emph{well-balanced} cuando es capaz de preservar estados estacionarios exactos como
+  el agua en reposo sobre batimetria irregular. Sin este tratamiento, los errores de
+  truncacion en el termino de pendiente del lecho generan corrientes espurias.
+    \begin{itemize}
+      \item \textbf{Thrust topografico:} formulacion especial para mantener el equilibrio en
+            reposo sobre batimetria variable, basada en Murillo y Garc\'{\i}a-Navarro (2010).
+      \item \textbf{Friccion de Manning:} $\tau = g\tilde{h}\,S_f\,\Delta x$ con
+            $S_f = \dfrac{n^2\sqrt{u^2+v^2}\cdot u}{h^{4/3}}$.
+    \end{itemize}
+  \item Aplica \emph{upwinding} para separar contribuciones positivas y negativas.
+  \item Rota de regreso al marco global $(x, y)$.
+\end{enumerate}
+
+\subsubsection{Paso bidimensional completo}
+
+La funcion \code{roe\_solve\_2D(state, dt, dx)} crea los cortes de interfaces en X e Y, llama a
+\code{roe\_solver()} en ambas direcciones y actualiza el estado segun
+
+\[
+  U^{n+1} = U^n - \frac{\Delta t}{\Delta x}F
+\]
+
+\subsubsection{Calculo del paso de tiempo}
+
+Para garantizar la estabilidad numerica, el paso de tiempo se adapta en cada iteracion segun la
+condicion de Courant-Friedrichs-Lewy (CFL). Esta condicion exige que ninguna onda fisicamente
+relevante recorra mas de una celda por paso de tiempo. La funcion
+\code{compute\_dt(state, mask, dx)} lo calcula como:
+
+\[
+  \Delta t = \mathrm{CFL} \times \min\left(\frac{\Delta x}{|u| + c},\frac{\Delta y}{|v| + c}\right)
+\]
+
+El valor se reduce globalmente con \code{MPI.MIN}, de modo que todos los procesos usan el
+paso de tiempo mas restrictivo del dominio completo.
+
+\subsubsection{Flujo del \code{step\_fn\_roe}}
+
+\begin{Verbatim}[fontsize=\small]
+Estado -> roe_solve_2D -> Intercambio de halos (MPI)
+-> Aplicar contorno -> Estado actualizado
+\end{Verbatim}
+
+\subsection{Solver Roe-Exner para SWE + Exner}
+
+\textbf{Archivo del solver:} \code{src/PyExner/solvers/roe\_exner\_solver.py}\\
+\textbf{Kernels numericos:} \code{src/PyExner/solvers/kernels/roe\_exner.py}
+
+Este solver resuelve las ecuaciones de aguas someras acopladas con la ecuacion de Exner.
+
+\subsubsection{Diferencias clave respecto a Roe}
+
+\begin{enumerate}[leftmargin=1.8em]
+  \item El estado incluye \code{z\_b}, \code{G}, \code{n\_b} y \code{seds}.
+  \item La funcion \code{compute\_G()} estima la tasa de transporte con una formulacion tipo
+  Meyer-Peter y Muller (MPM) modificada, con transporte $q_b \propto \gamma_1 \cdot \gamma_2 \cdot \gamma_3$.
+  Soporta multiples fracciones de sedimento con mezcla ponderada.
+  \item \code{exner\_solver} implementa el \emph{Approximately Coupled Method} (ACM), basado en
+  Mart\'{\i}nez-Aranda et al.\ (2021), que calcula el flujo de sedimento en interfaces usando
+  \emph{upwinding} basado en $\lambda_4$ (velocidad de onda de Exner) y actualiza la elevacion del lecho:
+  \[
+    z_b^{n+1} = z_b^n - \frac{\Delta t}{\Delta x}\nabla \cdot \mathbf{q_b}
+  \]
+  \item \code{\_get\_lambda} resuelve el polinomio cubico del sistema acoplado SWE-Exner
+  mediante las formulas trigonometricas de Cardano-Vieta para obtener $\lambda_{\min}$ y $\lambda_{\max}$.
+  \item \code{momentum\_corrections} anula el momento en direcciones donde el agua no puede fluir
+  (celdas secas adyacentes con lecho mas alto que la superficie libre, o paredes).
+\end{enumerate}
+
+\subsubsection{Expresiones relevantes para \code{G}}
+
+El factor \code{G} mide la intensidad del transporte de sedimento de fondo. Se calcula a partir
+del parametro de Shields $\theta$, que adimensionaliza la tension tangencial del flujo sobre una
+particula de sedimento. Si $\theta$ supera un umbral critico $\theta_c$, el sedimento se pone
+en movimiento:
+
+\[
+  \theta = \frac{n_p^2(u^2 + v^2)}{(s-1)d_{50}h^{1/3}},
+  \qquad
+  \Delta \theta = \max(\theta - \theta_c, 0)
+\]
+
+donde $n_p$ es la rugosidad de Manning asociada a la particula, $s = \rho_s / \rho_w$ es la
+densidad relativa del sedimento y $d_{50}$ el diametro mediano del grano. El exceso
+$\Delta\theta$ alimenta la formula de transporte tipo MPM, que estima el caudal solido por
+unidad de ancho. Cuando existen multiples fracciones granulometricas, el transporte total se
+obtiene como una suma ponderada por la fraccion en masa de cada clase.
+
+\subsubsection{Flujo del \code{step\_fn\_roeexner}}
+
+\begin{Verbatim}[fontsize=\small]
+1. roe_solve_2D         -> Resolver hidrodinamica (SWE)
+2. momentum_corrections -> Corregir momento en celdas bloqueadas
+3. boundaries.apply     -> Aplicar condiciones de contorno
+4. halo_exchange        -> Sincronizar h, hu, hv entre procesos MPI
+5. compute_G + halo     -> Calcular y sincronizar el factor G
+6. exner_solve_2D       -> Resolver evolucion del lecho
+7. halo_exchange z_b    -> Sincronizar lecho y recalcular n_b
+\end{Verbatim}
+
+\subsection{HLLC reservado}
+
+\textbf{Archivo:} \code{src/PyExner/solvers/kernels/hllc.py}
+
+El archivo existe como reserva para una implementacion futura del solver HLLC.
+
+\section{Modulo \code{integrators/}: integradores temporales}
+
+\textbf{Directorio:} \code{src/PyExner/integrators/}
+
+\subsection{Registro}
+
+\textbf{Archivo:} \code{src/PyExner/integrators/registry.py}
+
+Cada integrador se representa como un \code{IntegratorBundle}:
+
+\begin{tabularx}{\textwidth}{L{3cm}L{3cm}Y}
+\toprule
+Campo & Tipo & Descripcion \\
+\midrule
+\code{name} & \code{str} & Nombre del integrador \\
+\code{config} & \code{Callable} & Construye \code{IntegratorConfig} \\
+\code{run\_fn} & \code{Callable} & Bucle temporal principal \\
+\bottomrule
+\end{tabularx}
+
+\code{IntegratorConfig} contiene \code{cfl}, \code{end\_time}, \code{out\_freq},
+\code{solver\_config} y \code{solver\_bundle}.
+
+\subsection{Forward Euler}
+
+\textbf{Archivo:} \code{src/PyExner/integrators/forwardeuler.py}
+
+Es el esquema temporal mas simple: de primer orden en tiempo con error de truncacion
+$\mathcal{O}(\Delta t)$. Resulta util para prototipado rapido o problemas donde la precision
+temporal no es el factor limitante. Su estructura interna combina un bucle Python convencional
+(para la escritura de salida) con un bucle JIT-compilado por JAX (para las iteraciones
+numericas, sin sobrecarga de interprete):
+
+\begin{enumerate}[leftmargin=1.8em]
+  \item Un bucle exterior en Python controla escritura de salida y tiempos de salida.
+  \item Un bucle interior con \code{jax.lax.while\_loop} ejecuta iteraciones JIT hasta el siguiente tiempo de salida.
+  \item Un paso final ajusta $\Delta t$ para caer exactamente sobre el tiempo de salida.
+  \item El estado se escribe con \code{io.write\_state()} en formato PnetCDF paralelo.
+\end{enumerate}
+
+\subsection{SSPRK2}
+
+\textbf{Archivo:} \code{src/PyExner/integrators/SSPRK2.py}
+
+El esquema \emph{Strong Stability Preserving} Runge-Kutta de segundo orden ofrece doble orden
+de precision temporal respecto a Forward Euler manteniendo la propiedad TVD
+(\emph{Total Variation Diminishing}): si el operador espacial no aumenta la variacion total
+con un paso de Euler, tampoco lo hara el paso completo SSPRK2. Esto es especialmente importante
+en problemas con choques (roturas de presa, frentes de onda) donde preservar la monotonicidad
+evita oscilaciones espurias.
+
+El esquema se expresa como:
+
+\begin{align*}
+  U^{(1)} &= U^n + \Delta t\,L(U^n) \\
+  U^{n+1} &= \frac{1}{2}U^n + \frac{1}{2}U^{(1)} + \frac{1}{2}\Delta t\,L(U^{(1)})
+\end{align*}
+
+Es equivalente a un promedio entre el estado original y dos pasos tipo Euler. La propiedad SSP
+garantiza que el paso completo es estable bajo la misma restriccion CFL que un solo paso de Euler.
+
+\section{Modulo \code{domain/}: malla y condiciones de contorno}
+
+\textbf{Directorio:} \code{src/PyExner/domain/}
+
+\subsection{Malla}
+
+\textbf{Archivo:} \code{src/PyExner/domain/mesh.py}
+
+\code{Mesh2D} es un \emph{dataclass} para una malla estructurada uniforme. Se asume que el
+espaciamiento es el mismo en ambas direcciones ($\Delta x = \Delta y$), lo que simplifica el
+calculo de flujos y evita factores de correccion geometrica en el solver de Riemann.
+
+\begin{tabularx}{\textwidth}{L{4cm}Y}
+\toprule
+Campo & Descripcion \\
+\midrule
+\code{global\_Ny}, \code{global\_Nx} & Dimensiones globales del dominio \\
+\code{local\_Ny}, \code{local\_Nx} & Dimensiones locales por proceso MPI \\
+\code{x\_offset}, \code{y\_offset} & Desplazamiento del subdominio local \\
+\code{local\_X}, \code{local\_Y} & Coordenadas locales \\
+\code{dh} & Espaciamiento de malla con $\Delta x = \Delta y$ \\
+\code{local\_shape}, \code{global\_shape} & Tuplas con las formas local y global \\
+\bottomrule
+\end{tabularx}
+
+La malla se genera automaticamente a partir del archivo NetCDF de entrada y se divide entre procesos MPI.
+
+\subsection{Condiciones de contorno}
+
+\textbf{Archivo:} \code{src/PyExner/domain/boundary\_registry.py}
+
+\code{BoundaryManager} es la clase encargada de gestionar las condiciones de contorno. La
+identificacion de celdas fronterizas se realiza geometricamente: el usuario define poligonos
+en el archivo YAML y el codigo comprueba, mediante un test de punto-en-poligono compilado
+con JIT, que celdas caen dentro de cada zona de contorno. Este enfoque es mas flexible que
+imponer condiciones sobre filas o columnas fijas, pues permite fronteras arbitrarias (curvas,
+obstaculos internos, etc.).
+
+Sus responsabilidades principales son:
+
+\begin{itemize}[leftmargin=1.6em]
+  \item Leer las definiciones de contorno desde YAML.
+  \item Identificar celdas de contorno mediante los poligonos mencionados.
+  \item Calcular indices interiores adyacentes para condiciones reflectivas o transmisivas.
+  \item Aplicar todas las condiciones de contorno secuencialmente con \code{apply(state, time)}.
+\end{itemize}
+
+\subsection{Tipos de condicion de contorno}
+
+\textbf{Directorio:} \code{src/PyExner/domain/boundaries/}
+
+{\footnotesize
+\begin{longtable}{L{5cm}L{4.5cm}L{5.2cm}}
+\toprule
+Clase & Registro & Descripcion \\
+\midrule
+\endhead
+\code{RoeReflectiveBoundary} & \code{Roe Reflective} & Pared solida: copia escalares y refleja la componente normal del momento \\
+\code{RoeTransmissiveBoundary} & \code{Roe Transmissive} & Salida libre: copia todos los campos desde la celda interior \\
+\code{RoeExnerReflectiveBoundary} & \code{Roe Exner Reflective} & Pared solida con campos adicionales de Exner \\
+\code{RoeExnerTransmissiveBoundary} & \code{Roe Exner Transmissive} & Salida libre con campos de Exner \\
+\code{RoeExnerZeroMomentumBoundary} & \code{Roe Exner ZeroMomentum} & Impone \code{hu = hv = 0} en la frontera \\
+\bottomrule
+\end{longtable}
+}
+
+Todas las clases de contorno se registran como \emph{pytree} de JAX para ser compatibles con
+\code{jax.jit}. A continuacion se describe brevemente cada tipo:
+
+\begin{itemize}[leftmargin=1.6em]
+  \item \textbf{Reflectiva:} modela una pared solida impermiable. Se copian los escalares de la
+  celda interior adyacente pero se invierte el signo de la componente normal del momento, de modo
+  que el flujo normal neto es cero.
+  \item \textbf{Transmisiva:} modela una salida libre. Todos los campos se copian directamente
+  desde la celda interior, permitiendo que las ondas abandonen el dominio sin generar reflexiones
+  artificiales.
+  \item \textbf{Zero Momentum} (solo Roe Exner): impone $hu = hv = 0$ en las celdas fronterizas,
+  creando una zona de remanso sin velocidad.
+\end{itemize}
+
+\subsection{Ejemplo de definicion YAML}
+
+\begin{Verbatim}[fontsize=\small]
+boundaries:
+  wall_left:
+    type: Reflective
+    polygon:
+      - [0.0, 0.0]
+      - [0.01, 0.0]
+      - [0.01, 10.0]
+      - [0.0, 10.0]
+    values: [NaN, 0.0, NaN, NaN]
+    normal: [-1.0, 0.0]
+\end{Verbatim}
+
+El campo \code{polygon} define los vertices de la zona fronteriza en coordenadas del dominio.
+El vector \code{values} permite forzar valores concretos en las celdas de contorno; los campos
+marcados como \code{NaN} no se modifican y se tratan segun la logica propia del tipo de condicion.
+El vector \code{normal} indica la orientacion de la pared (normal exterior unitaria), necesario
+para la reflexion correcta del momento.
+
+El valor de \code{flux\_scheme} se concatena con \code{type} para consultar el registro. Por ejemplo,
+\code{Roe Exner} mas \code{Reflective} produce \code{Roe Exner Reflective}.
+
+\section{Modulo \code{parallel/}: computacion distribuida MPI}
+
+\textbf{Archivo:} \code{src/PyExner/parallel/mpi\_utils.py}
+
+Cuando el dominio es demasiado grande para caber en la memoria de una sola GPU, o cuando se
+desea reducir el tiempo de computo, PyExner descompone la malla en subdominios rectangulares y
+asigna uno a cada proceso MPI. Los procesos se organizan en una topologia cartesiana 2D que
+refleja la disposicion espacial del dominio, facilitando la identificacion de vecinos.
+
+\subsection{Clase \code{Parallel}}
+
+\begin{tabularx}{\textwidth}{L{3.5cm}Y}
+\toprule
+Atributo & Descripcion \\
+\midrule
+\code{parNx}, \code{parNy} & Numero de particiones en X e Y \\
+\code{cart\_comm} & Comunicador cartesiano 2D \\
+\code{rank}, \code{size} & Rango del proceso y numero total de procesos \\
+\code{coords} & Coordenadas del proceso en la topologia \\
+\code{dims} & Dimensiones de la topologia, $(parNy, parNx)$ \\
+\code{neighbors} & Rangos vecinos: \code{north}, \code{south}, \code{east}, \code{west} \\
+\bottomrule
+\end{tabularx}
+
+\subsection{Intercambio de halos}
+
+Cada subdominio necesita conocer una franja de celdas pertenecientes a sus vecinos para evaluar
+correctamente los flujos en las interfaces compartidas. Estas celdas auxiliares se denominan
+\emph{halos} o \emph{ghost cells}. Tras cada actualizacion del estado, los halos se sincronizan
+mediante envios punto a punto de MPI.
+
+El intercambio de halos se define en cada kernel de solver, por ejemplo en
+\code{src/PyExner/solvers/\allowbreak kernels/roe.py} y
+\code{src/PyExner/solvers/\allowbreak kernels/roe\_exner.py}.
+
+\begin{itemize}[leftmargin=1.6em]
+  \item Usa \code{mpi4jax} para llamadas MPI compatibles con JAX y JIT, de modo que las
+  comunicaciones se integran en el grafo de computo sin salir de la compilacion JIT.
+  \item Intercambia celdas fantasma de ancho 1 (suficiente para un stencil de 3 puntos).
+  \item El orden de envio es: \code{west -> north -> east -> south}.
+  \item El orden de recepcion es: \code{east -> south -> west -> north}.
+  \item El orden circular evita bloqueos mutuos (\emph{deadlock}) al garantizar que cada
+  proceso envia antes de intentar recibir del mismo vecino.
+\end{itemize}
+
+\section{Modulo \code{io/}: entrada y salida}
+
+\textbf{Directorio:} \code{src/PyExner/io/}
+
+PyExner utiliza PnetCDF (Parallel NetCDF) como formato de archivo. A diferencia del NetCDF
+clasico, PnetCDF permite que multiples procesos MPI lean y escriban simultaneamente el mismo
+archivo, evitando cuellos de botella en la serializacion de datos y escalando correctamente a
+cientos de procesos.
+
+\subsection{\code{PnetCDFStateIO}}
+
+\textbf{Archivo:} \code{src/PyExner/io/pnetcdf\_reader.py}
+
+Esta clase centraliza la lectura y escritura en formato PnetCDF.
+
+\begin{tabularx}{\textwidth}{L{4.5cm}Y}
+\toprule
+Metodo & Descripcion \\
+\midrule
+\code{generate\_mesh()} & Lee coordenadas globales, divide el dominio y retorna un \code{Mesh2D} \\
+\code{read\_state(state, mesh, config)} & Lee variables del NetCDF de entrada y llena el estado, incluyendo halos si aplica \\
+\code{write\_state(state, mesh, mask)} & Escribe el estado actual al NetCDF de salida de forma colectiva \\
+\bottomrule
+\end{tabularx}
+
+Tambien soporta lectura de parametros sedimentologicos desde YAML, como fraccion, diametro $d_{50}$,
+densidad, flujos de erosion y deposicion, y porosidad de la mezcla.
+
+\subsection{Archivos reservados}
+
+\begin{itemize}[leftmargin=1.6em]
+  \item \code{src/PyExner/io/diagnostics.py}: reservado para diagnosticos futuros.
+  \item \code{src/PyExner/io/visualizer.py}: reservado para visualizacion futura.
+\end{itemize}
+
+\section{Modulo \code{utils/}: constantes y utilidades}
+
+\textbf{Directorio:} \code{src/PyExner/utils/}
+
+\subsection{Constantes}
+
+\textbf{Archivo:} \code{src/PyExner/utils/constants.py}
+
+El modulo define tolerancias numericas que evitan divisiones por cero y filtran valores
+fisicamente irrelevantes. \code{DRY\_TOL} marca el limite por debajo del cual una celda se
+considera seca (sin flujo); \code{SED\_TOL} previene el transporte de cantidades infinitesimales
+de sedimento; \code{VEL\_TOL} anula velocidades residuales menores que el ruido numerico;
+y \code{TIMESTEP\_TOL} y \code{FLUX\_TOL} proporcionan margenes de seguridad para el
+integrador y los flujos interfaz, respectivamente.
+
+\begin{tabularx}{\textwidth}{L{3.2cm}L{2.2cm}Y}
+\toprule
+Constante & Valor & Descripcion \\
+\midrule
+\code{g} & \code{9.81} & Aceleracion de la gravedad \\
+\code{DRY\_TOL} & \code{1e-3} & Tolerancia para celdas secas \\
+\code{SED\_TOL} & \code{1e-4} & Tolerancia para sedimento minimo \\
+\code{VEL\_TOL} & \code{1e-6} & Tolerancia para velocidades pequenas \\
+\code{TIMESTEP\_TOL} & \code{5e-7} & Tolerancia para el integrador temporal \\
+\code{FLUX\_TOL} & \code{1e-12} & Tolerancia para flujos \\
+\bottomrule
+\end{tabularx}
+
+\section{Tests y casos de ejemplo}
+
+\textbf{Directorio:} \code{tests/}
+
+Los casos de prueba cubren problemas clasicos de validacion en hidraulica computacional.
+Las roturas de presa (\emph{dam break}) son referencias estandar porque admiten solucion
+analitica o semiexacta, lo que permite verificar la convergencia y la correcta captura de
+choques. Los casos con sedimento (\code{Roe Exner}) validan la evolucion del lecho comparando
+con resultados publicados.
+
+{\footnotesize
+\begin{longtable}{L{2.8cm}L{6.1cm}L{1.8cm}L{3.5cm}}
+\toprule
+Caso & Directorio & Esquema & Descripcion \\
+\midrule
+\endhead
+\textbf{1D Dam Break} & \code{tests/runtime/1D\_dambreak/} & Roe & Rotura de presa 1D clasica \\
+\textbf{2D Dam Break} & \code{tests/runtime/2D\_dambreak/} & Roe & Rotura de presa 2D simetrica \\
+\textbf{Symmetrical Dam Break} & \code{tests/runtime/symmetrical\_dambreak/} & Roe & Caso de dam break simetrico \\
+\textbf{Erodible Channel} & \code{tests/runtime/erodible\_channel/} & Roe Exner & Canal erodible con transporte de sedimentos \\
+\textbf{L-Domain} & \code{tests/runtime/L\_domain/} & Roe Exner & Dominio en forma de L con erosion \\
+\bottomrule
+\end{longtable}
+}
+
+Cada caso incluye, en general, un script para construir el input, un archivo YAML de configuracion,
+un script de ejecucion y un script de analisis de datos.
+
+\section{Diagrama de flujo de una simulacion}
+
+\begin{Verbatim}[fontsize=\small]
+run_driver()
+|
++- 1. Leer YAML config
++- 2. Parallel(params) <- Topologia MPI cartesiana
++- 3. PnetCDFStateIO <- Abrir archivos NC
++- 4. generate_mesh() <- Dividir dominio
++- 5. create_empty_state() <- RoeState o RoeExnerState
++- 6. read_state() <- Leer condiciones iniciales
++- 7. BoundaryManager() <- Configurar contornos
++- 8. create_solver_bundle() <- Roe o Roe Exner
++- 9. create_integrator_bundle() <- FE o SSPRK2
+|
++- 10. integrator.run_fn()
+    |
+    +- while time < end_time:
+       +- jax.lax.while_loop:
+          +- compute_dt (CFL)
+          +- solver.step_fn()
+             +- Roe solve 2D (SWE)
+             +- [Momentum corrections]
+             +- Boundary apply
+             +- Halo exchange (MPI)
+             +- [compute_G + Exner]
+             +- [Halo z_b + n_b]
+          +- time += dt
+       +- io.write_state() <- salida NC
+
+return state, (X, Y)
+\end{Verbatim}
+
+Los pasos entre corchetes solo aplican al solver \code{Roe Exner}.
+
+\section{Sistema de registros}
+
+PyExner usa un \emph{patron de registro con decoradores} para facilitar extensibilidad. En lugar
+de que el codigo central contenga sentencias \code{if/elif} que enumeren todas las opciones, cada
+nuevo componente se registra automaticamente al importarse. Esto desacopla la logica de seleccion
+de la implementacion concreta y permite agregar variantes sin modificar el codigo existente
+(principio abierto/cerrado). Los registros principales son:
+
+{\footnotesize
+\begin{tabularx}{\textwidth}{L{3.2cm}L{6cm}Y}
+\toprule
+Registro & Decorador & Uso \\
+\midrule
+\code{STATE\_REGISTRY} & \code{@register\_state(nombre)} & Estados o variables conservativas \\
+\code{SOLVER\_REGISTRY} & \code{@register\_solver\_bundle(nombre)} & Solvers de Riemann \\
+\code{INTEGRATOR\_REGISTRY} & \code{@register\_integrator\_bundle(nombre)} & Integradores temporales \\
+\code{BOUNDARY\_REGISTRY} & \code{@register\_boundary(nombre)} & Condiciones de contorno \\
+\bottomrule
+\end{tabularx}
+}
+
+Para agregar un nuevo estado, solver, integrador o condicion de contorno, basta con crear la nueva
+clase o funcion, decorarla adecuadamente e importarla desde el \code{\_\_init\_\_.py} correspondiente.
+
+\end{document}

@@ -1,0 +1,285 @@
+\documentclass[11pt]{article}
+
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{amsmath, amssymb}
+\usepackage{geometry}
+\usepackage{setspace}
+\usepackage{booktabs}
+\usepackage{enumitem}
+\usepackage{hyperref}
+
+\geometry{a4paper, margin=2.5cm}
+\onehalfspacing
+
+\title{Plan de Extension del Framework PyExner para el Modelo EPB de Dos Fluidos}
+\author{Esteban Vega Romero}
+%\date{29 de abril de 2026}
+
+\begin{document}
+
+\maketitle
+
+\section*{Resumen}
+
+Este documento describe las fases de extension del framework \texttt{PyExner} para incorporar un modelo 2.5D de \emph{Burbujas de Plasma Ecuatoriales} (EPB) basado en una formulacion hiperb\'olica de dos fluidos. El objetivo no es reemplazar los solucionadores hidraulicos ya existentes, sino a\~nadir una nueva rama fisica \texttt{EPB\_TwoFluid} que conviva con los esquemas \texttt{Roe} y \texttt{Roe Exner}.
+
+La idea central es reutilizar la infraestructura de ejecucion, malla, MPI, contornos, integracion temporal e I/O paralelo del framework, mientras se introduce un nuevo conjunto de variables conservadas, nuevos flujos hiperb\'olicos, un operador de fuentes separado y una etapa eliptica para el potencial de polarizacion.
+
+El sistema continuo de interes se expresa como
+
+\begin{equation}
+\frac{\partial \mathbf{Q}}{\partial t}
++ \frac{\partial \mathbf{F}(\mathbf{Q})}{\partial x}
++ \frac{\partial \mathbf{G}(\mathbf{Q})}{\partial z}
+= \mathbf{S}(\mathbf{Q}),
+\end{equation}
+
+donde el vector de estado conservado es
+
+\begin{equation}
+\mathbf{Q} =
+\begin{bmatrix}
+n_i & n_e & j_{ix} & j_{iy} & j_{iz} & j_{ex} & j_{ey} & j_{ez}
+\end{bmatrix}^{T}.
+\end{equation}
+
+Una restriccion de dise\~no fundamental es mantener separadas las siguientes piezas numericas:
+
+\begin{enumerate}[label=\arabic*.]
+    \item el transporte hiperb\'olico explicitamente conservativo,
+    \item el operador de fuentes rigidas de colision y electrodinamica,
+    \item el solve eliptico que recupera el campo electrico de polarizacion mediante $\mathbf{E} = \mathbf{E}_0 - \nabla \phi$.
+\end{enumerate}
+
+\section{Principios de Diseño}
+
+La extension del framework se guiara por los siguientes principios:
+
+\begin{enumerate}[label=\arabic*.]
+    \item \textbf{Extension aditiva del framework.} Los modelos hidraulicos existentes deben seguir funcionando sin cambios de comportamiento.
+    \item \textbf{Separacion entre fisica e infraestructura.} La arquitectura de \texttt{PyExner} se conserva; lo que cambia es la fisica implementada en una nueva rama de solver.
+    \item \textbf{Separacion entre flujo, fuentes y restricciones.} El paso hiperb\'olico no debe mezclar la dinamica de transporte con colisiones ni con el solve de $\phi$.
+    \item \textbf{Consistencia del estado conservado.} El orden de variables en memoria, registros, kernels y pruebas debe coincidir exactamente con el orden fisico de $\mathbf{Q}$.
+    \item \textbf{Implementacion vectorizada.} Los kernels numericos deben expresarse con \texttt{jax.numpy}, sin bucles Python por celda.
+\end{enumerate}
+
+\section{Fase 1: Generalizacion Minima del Framework}
+
+\subsection*{Objetivo}
+
+Eliminar las suposiciones estrictamente hidraulicas del framework compartido, pero sin modificar la API externa de los modelos existentes.
+
+\subsection*{Motivacion}
+
+En el estado actual, algunas piezas comunes del framework estan escritas bajo la hipotesis de que el estado siempre contiene variables como $h$, $hu$ y $hv$. Para EPB, el estado conservado tiene ocho componentes distintas y no debe forzarse dentro de nombres hidraulicos artificiales.
+
+\subsection*{Trabajo tecnico}
+
+\begin{enumerate}[label=\arabic*.]
+    \item Generalizar las utilidades de estado para que operen sobre cualquier \texttt{dataclass} de arreglos.
+    \item Revisar los \emph{NamedTuple} y tipos del integrador temporal para aceptar un estado arbitrario compatible con PyTrees de JAX.
+    \item Mantener compatibilidad hacia atras con \texttt{Roe} y \texttt{Roe Exner}.
+\end{enumerate}
+
+\subsection*{Entregable}
+
+Una base de framework capaz de transportar estados no hidraulicos sin romper la funcionalidad ya existente.
+
+\subsection*{Riesgo principal}
+
+El riesgo en esta fase es introducir una generalizacion demasiado agresiva y afectar los modelos SWE ya verificados. Por eso los cambios deben ser minimos y localizados.
+
+\section{Fase 2: Alta de la Rama EPB\_TwoFluid}
+
+\subsection*{Objetivo}
+
+Crear la nueva rama fisica \texttt{EPB\_TwoFluid} dentro del sistema de registros del framework.
+
+\subsection*{Trabajo tecnico}
+
+\begin{enumerate}[label=\arabic*.]
+    \item Crear un nuevo estado conservado dedicado para EPB.
+    \item Registrar el nuevo estado con la cadena exacta \texttt{EPB\_TwoFluid}.
+    \item Crear y registrar el nuevo \emph{solver bundle} con la misma cadena.
+    \item Activar los imports necesarios para que el registro ocurra automaticamente al cargar el paquete.
+\end{enumerate}
+
+\subsection*{Razon numerica}
+
+La formulacion EPB no es una variacion menor del solver de Roe. El modelo tiene nuevas variables, nuevos flujos y nuevas escalas temporales. Por tanto, debe implementarse como una rama fisica propia y no como un caso especial dentro del codigo hidraulico.
+
+\subsection*{Entregable}
+
+Un nuevo camino funcional dentro del framework:
+
+\begin{equation}
+\texttt{flux\_scheme: EPB\_TwoFluid}
+\Longrightarrow
+\texttt{state} + \texttt{solver} + \texttt{boundary} + \texttt{integrator}.
+\end{equation}
+
+\section{Fase 3: Slice Hiperbolico Puro}
+
+\subsection*{Objetivo}
+
+Implementar el nucleo de transporte hiperb\'olico del sistema EPB de dos fluidos sin incluir todavia las fuentes rigidas ni el solve electrostatico.
+
+\subsection*{Contenido matematico}
+
+Se implementaran los tensores de flujo $\mathbf{F}(\mathbf{Q})$ y $\mathbf{G}(\mathbf{Q})$ con la convencion de signos correcta para electrones e iones. Esto es especialmente delicado en los terminos de flujo electronico. Por ejemplo, el flujo en $x$ para el momento electronico en la direccion $x$ debe conservar la estructura
+
+\begin{equation}
+F_6 = -\frac{j_{ex}^{2}}{e n_e} - \frac{e}{M_e} p_e,
+\end{equation}
+
+y su permutacion correspondiente en la direccion vertical debe preservarse en $\mathbf{G}(\mathbf{Q})$.
+
+\subsection*{Trabajo tecnico}
+
+\begin{enumerate}[label=\arabic*.]
+    \item Implementar kernels de flujo con \texttt{jax.numpy}.
+    \item Calcular cotas de velocidad de onda para un esquema tipo HLL o HLLC.
+    \item Construir un \emph{step} hiperb\'olico sin reusar eigensistemas de SWE.
+    \item Calcular $\Delta t$ con base en la velocidad maxima de onda y reduccion MPI global.
+\end{enumerate}
+
+\subsection*{Entregable}
+
+Un solver de transporte que preserve estados uniformes y que pueda ejecutarse con condiciones iniciales simples sin activar aun los terminos fuente.
+
+\subsection*{Riesgo principal}
+
+El mayor riesgo es reutilizar por comodidad formulas de Roe/SWE y contaminar el modelo EPB con autovalores o estructuras de onda que no le pertenecen.
+
+\section{Fase 4: Contornos e I/O para EPB}
+
+\subsection*{Objetivo}
+
+Integrar el nuevo modelo EPB con las piezas de entrada, salida y manejo de frontera del framework.
+
+\subsection*{Trabajo tecnico}
+
+\begin{enumerate}[label=\arabic*.]
+    \item Definir condiciones de contorno transmisivas para los ocho campos del estado EPB.
+    \item Asegurar que la convencion de registro use nombres del tipo
+    \begin{equation}
+    \texttt{EPB\_TwoFluid Transmissive}.
+    \end{equation}
+    \item Extender la lectura NetCDF para poblar las ocho variables conservadas.
+    \item Extender la escritura NetCDF para exportar esas variables sin asumir estructura hidraulica.
+\end{enumerate}
+
+\subsection*{Observacion importante}
+
+La capa de I/O de \texttt{PyExner} ya tiene bastante generalidad porque recorre dinamicamente los campos del estado. Por eso, el trabajo principal no sera rehacer la clase de I/O, sino fijar de forma consistente los nombres, shapes y convenciones de entrada/salida para EPB.
+
+\subsection*{Entregable}
+
+Un caso EPB capaz de leer condiciones iniciales, aplicar contornos y escribir resultados sin modificaciones manuales en el pipeline de ejecucion.
+
+\section{Fase 5: Fuentes Rigidas y Acoplamiento Electrost\'atico}
+
+\subsection*{Objetivo}
+
+Incorporar el operador de fuentes $\mathbf{S}(\mathbf{Q})$ y la etapa eliptica asociada al potencial de polarizacion $\phi$.
+
+\subsection*{Contenido fisico}
+
+El vector fuente reune al menos los siguientes mecanismos:
+
+\begin{enumerate}[label=\arabic*.]
+    \item gravedad,
+    \item fuerza electrica,
+    \item fuerza magnetica,
+    \item colisiones ion-neutro,
+    \item colisiones electron-neutro,
+    \item colisiones electron-ion.
+\end{enumerate}
+
+El campo electrico efectivo se actualiza segun
+
+\begin{equation}
+\mathbf{E} = \mathbf{E}_0 - \nabla \phi,
+\end{equation}
+
+y la restriccion de conservacion de carga se recupera a traves de la ecuacion eliptica asociada al potencial, en lugar de imponerse dentro del paso hiperb\'olico.
+
+\subsection*{Trabajo tecnico}
+
+\begin{enumerate}[label=\arabic*.]
+    \item Implementar el operador separado de fuentes en un kernel propio.
+    \item Definir con claridad el orden de actualizacion entre transporte, fuentes y solve de $\phi$.
+    \item Preparar la estructura para parametros de fondo: $g$, $E_x$, $E_y$, $E_z$, $B_0$, $U_x$, $U_y$, $U_z$, $\nu_{in}$, $\nu_{en}$ y $\nu_{ei}$.
+\end{enumerate}
+
+\subsection*{Riesgo principal}
+
+Si las fuentes rigidas se integran de manera completamente explicita dentro del mismo paso del transporte, el esquema puede volverse numericamente inestable aun cuando el CFL convectivo sea pequeno.
+
+\section{Fase 6: Integrador IMEX}
+
+\subsection*{Objetivo}
+
+Introducir un integrador de tipo IMEX que trate de forma explicita el transporte y de forma implicita las fuentes locales rigidas.
+
+\subsection*{Razon numerica}
+
+El paso hiperb\'olico esta gobernado por velocidades de onda, mientras que la parte fuente puede estar controlada por frecuencias colisionales mucho mas rapidas. Un unico integrador explicito obligaria a un paso temporal excesivamente pequeno o directamente inestable.
+
+\subsection*{Trabajo tecnico}
+
+\begin{enumerate}[label=\arabic*.]
+    \item Crear un nuevo integrador \texttt{IMEX} como rama adicional del framework.
+    \item Reutilizar el mismo contrato de ejecucion del framework: configuracion, bucle temporal y escritura de salida.
+    \item Resolver la parte implicita con algebra local por celda, sin esconder la rigidez dentro del flujo hiperb\'olico.
+\end{enumerate}
+
+\subsection*{Entregable}
+
+Un integrador estable para EPB que permita acoplar transporte, fuentes y solve electrostatico sin destruir la estructura del framework.
+
+\section{Fase 7: Validacion}
+
+\subsection*{Objetivo}
+
+Verificar, en cada etapa, que la extension EPB no contiene errores estructurales de registro, signos, orden de variables o acoplamiento MPI.
+
+\subsection*{Bateria minima de validacion}
+
+\begin{enumerate}[label=\arabic*.]
+    \item \textbf{Wiring del framework:} comprobar que \texttt{EPB\_TwoFluid} crea el estado y el solver correctos.
+    \item \textbf{Orden del estado:} verificar que el empaquetado y desempaquetado de $\mathbf{Q}$ respeta el orden fisico definido.
+    \item \textbf{Signo del flujo electronico:} validar especificamente el signo de la presion y de la continuidad electronica.
+    \item \textbf{Contornos:} confirmar que el registro de fronteras sigue la convencion del framework.
+    \item \textbf{Estado uniforme:} un estado constante debe permanecer constante en ausencia de fuentes y gradientes.
+    \item \textbf{Halo exchange:} verificar que las ocho variables requeridas se sincronizan entre subdominios.
+\end{enumerate}
+
+\subsection*{Entregable}
+
+Un conjunto pequeno pero discriminante de pruebas que detecte errores catastroficos temprano, antes de abordar simulaciones fisicas complejas.
+
+\section{Orden de Ejecucion Recomendado}
+
+El orden recomendado de implementacion es el siguiente:
+
+\begin{enumerate}[label=\arabic*.]
+    \item Generalizacion minima del framework compartido.
+    \item Alta del estado \texttt{EPB\_TwoFluid} y su solver bundle.
+    \item Implementacion del slice hiperb\'olico puro.
+    \item Integracion de contornos e I/O.
+    \item Implementacion del operador de fuentes y del solve de $\phi$.
+    \item Incorporacion del integrador IMEX.
+    \item Validacion incremental y casos de prueba canonicos.
+\end{enumerate}
+
+Este orden minimiza el riesgo de mezclar problemas de infraestructura con problemas de fisica o estabilidad numerica.
+
+\section{Conclusiones}
+
+La extension EPB de \texttt{PyExner} es viable siempre que se conserve una separacion estricta entre infraestructura compartida y fisica especifica del nuevo modelo. La reutilizacion debe concentrarse en la arquitectura del framework, no en el nucleo numerico de los solucionadores hidraulicos.
+
+Desde el punto de vista de ingenieria de software, el proyecto consiste en convertir \texttt{PyExner} en un framework con una nueva familia de solucionadores, sin alterar la validez de las ramas \texttt{Roe} y \texttt{Roe Exner}. Desde el punto de vista numerico, el requisito critico es mantener desacoplados el transporte hiperb\'olico, los terminos fuente rigidos y el solver electrostatico.
+
+\end{document}

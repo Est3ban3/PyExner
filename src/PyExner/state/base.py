@@ -3,6 +3,16 @@ import jax.numpy as jnp
 import numpy as np
 
 from dataclasses import dataclass, fields
+from typing import Any
+
+# Generic alias for any JAX-pytree simulation state.
+#
+# The framework transports states structurally (through dataclass fields and the
+# JAX pytree protocol), so it does not depend on hydraulic fields such as
+# ``h``, ``hu`` or ``hv``. New physical branches (e.g. EPB_TwoFluid) may define
+# their own conserved state without inheriting from ``BaseState``; the shared
+# infrastructure only requires that the state be a registered pytree.
+State = Any
 
 
 @dataclass

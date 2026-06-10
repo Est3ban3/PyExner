@@ -3,7 +3,7 @@
 from PyExner.utils.constants import TIMESTEP_TOL, DRY_TOL
 from PyExner.integrators.registry import IntegratorConfig, IntegratorBundle, register_integrator_bundle
 from PyExner.solvers.registry import SolverBundle, SolverConfig
-from PyExner.state.base import BaseState
+from PyExner.state.base import State
 from typing import NamedTuple, Dict, Optional
 
 import jax
@@ -26,7 +26,7 @@ class SimState(NamedTuple):
     out_freq: float
     end_time: float
     dt: float
-    state: BaseState
+    state: State
     cfl: float
 
 def cond_fn(simstate):
@@ -48,7 +48,7 @@ def make_body_fn(solver_bundle, mask, solver_config):
         )
     return body_fn
 
-def run_fn_forwardeuler(state: BaseState, config: IntegratorConfig, io, mesh, b_mask) -> BaseState:
+def run_fn_forwardeuler(state: State, config: IntegratorConfig, io, mesh, b_mask) -> State:
     iters = 0
     time = 0.0
     numOut = 0

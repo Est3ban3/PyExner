@@ -3,14 +3,14 @@ from typing import Callable, NamedTuple
 
 
 from PyExner.solvers.registry import SolverBundle, SolverConfig
-from PyExner.state.base import BaseState
+from PyExner.state.base import State
 
 class SimState(NamedTuple):
     time: float
     out_freq: float
     end_time: float
     dt: float
-    state: BaseState
+    state: State
     cfl: float
 
 class IntegratorConfig(NamedTuple):

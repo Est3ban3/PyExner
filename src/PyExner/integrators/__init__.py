@@ -1,4 +1,5 @@
 from .forwardeuler import integrator_forwardeuler
+from .imex import integrator_imex
 
 from .registry import (
     INTEGRATOR_REGISTRY,

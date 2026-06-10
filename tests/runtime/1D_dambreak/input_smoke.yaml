@@ -1,0 +1,32 @@
+end_time: 2.0
+out_freq: 1.0
+cfl: 0.5
+flux_scheme: Roe
+integrator: Forward Euler
+parNx: 4
+parNy: 1
+input_file: input.nc
+output_file: output.nc
+dh: 0.25
+
+boundaries:
+
+  inlet:
+    type: Transmissive
+    polygon:
+      - [-0.125, -0.25]
+      - [ 0.125, -0.25]
+      - [ 0.125,  2.25]
+      - [-0.125,  2.25]
+    values: [0.0, 0.0, 0.0, 0.0]
+    normal: [-1.0, 0.0]
+
+  outlet:
+    type: Transmissive
+    polygon:
+      - [ 99.875, -0.25]
+      - [100.125, -0.25]
+      - [100.125,  2.25]
+      - [ 99.875,  2.25]
+    values: [0.0, 0.0, 0.0, 0.0]
+    normal: [1.0, 0.0]

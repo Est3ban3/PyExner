@@ -1,0 +1,103 @@
+end_time: 1.0
+out_freq: 0.5
+cfl: 0.4
+flux_scheme: EPB_TwoFluid
+integrator: IMEX
+parNx: 1
+parNy: 1
+input_file: /home/est3ban3/PyExnerFork/PyExner/tests/runtime/EPB/input.nc
+output_file: /home/est3ban3/PyExnerFork/PyExner/tests/runtime/EPB/output.nc
+dh: 0.5
+boundaries:
+  west:
+    type: Transmissive
+    polygon:
+    - - -0.05
+      - -0.05
+    - - 0.5
+      - -0.05
+    - - 0.5
+      - 10.05
+    - - -0.05
+      - 10.05
+    values:
+    - nan
+    - nan
+    - nan
+    - nan
+    - nan
+    - nan
+    - nan
+    - nan
+    normal:
+    - -1.0
+    - 0.0
+  east:
+    type: Transmissive
+    polygon:
+    - - 19.5
+      - -0.05
+    - - 20.05
+      - -0.05
+    - - 20.05
+      - 10.05
+    - - 19.5
+      - 10.05
+    values:
+    - nan
+    - nan
+    - nan
+    - nan
+    - nan
+    - nan
+    - nan
+    - nan
+    normal:
+    - 1.0
+    - 0.0
+  south:
+    type: Transmissive
+    polygon:
+    - - -0.05
+      - -0.05
+    - - 20.05
+      - -0.05
+    - - 20.05
+      - 0.5
+    - - -0.05
+      - 0.5
+    values:
+    - nan
+    - nan
+    - nan
+    - nan
+    - nan
+    - nan
+    - nan
+    - nan
+    normal:
+    - 0.0
+    - -1.0
+  north:
+    type: Transmissive
+    polygon:
+    - - -0.05
+      - 9.5
+    - - 20.05
+      - 9.5
+    - - 20.05
+      - 10.05
+    - - -0.05
+      - 10.05
+    values:
+    - nan
+    - nan
+    - nan
+    - nan
+    - nan
+    - nan
+    - nan
+    - nan
+    normal:
+    - 0.0
+    - 1.0
