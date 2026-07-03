@@ -1,4 +1,4 @@
-"""Figuras tipicas de EPB a partir de los kernels validados (Pasos 1-7).
+"""Figuras tipicas de EPB a partir de los kernels ya validados.
 
 Genera en ``tests/runtime/EPB/figures/``:
 
@@ -69,7 +69,7 @@ def fig1_perfiles():
     gam = np.where(n0 > 1e-4 * FR.n_max, gam, np.nan)
     # Signo del gradiente: solo el BOTTOMSIDE (dn/dz > 0, denso encima de
     # ligero con g hacia abajo) es RT-inestable; en el topside el drive es
-    # estabilizante => gamma = -beta (igual criterio que bottomside_Ln, Paso 6).
+    # estabilizante => gamma = -beta (igual criterio que bottomside_Ln).
     dndz = np.gradient(n0, float(z[1] - z[0]))
     gam = np.where(dndz > 0.0, gam, -np.asarray(bg.beta))
 
@@ -187,7 +187,7 @@ def fig3_pre_onset():
     axs[0].plot(cast0.t_lt, cast0.V, "C0", ls="--", lw=1.5, label="sin PRE")
     axs[0].axhline(0, color="k", lw=0.8)
     axs[0].set_ylabel("drift V [m/s]")
-    axs[0].set_title("disparador PRE y onset de la EPB (Paso 7)")
+    axs[0].set_title("disparador PRE y onset de la EPB")
     axs[0].legend(loc="upper left")
 
     axs[1].plot(t, cast.h_peak / 1e3, "C1", lw=2)

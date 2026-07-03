@@ -1,7 +1,8 @@
-"""Paso 6 del camino critico: geometria dipolar integrada en tubo de flujo.
+"""Geometria dipolar integrada en tubo de flujo (``epb_fluxtube``).
 
-Valida ``epb_fluxtube``: geometria de la linea dipolar, conductancias Pedersen
-integradas (Sigma_P^F, Sigma_P^E), apantallamiento F_s y la tasa RT flux-tube
+Valida la geometria de la linea dipolar, las conductancias Pedersen
+integradas (Sigma_P^F, Sigma_P^E), el apantallamiento F_s y la tasa RT
+flux-tube
 
     gamma_FT(h_apex) = F_s g/(nu_eff L_n) - beta.
 
@@ -153,7 +154,7 @@ def test_D_threshold():
 
 
 def main():
-    print("=== Paso 6: geometria flux-tube integrada (dipolar) ===\n")
+    print("=== Geometria flux-tube integrada (dipolar) ===\n")
     ok = True
     ok &= test_A_geometry()
     ok &= test_B_convergence()

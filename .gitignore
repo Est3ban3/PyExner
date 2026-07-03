@@ -211,3 +211,6 @@ __marimo__/
 *.nc
 tests/*/*/*.png
 tests/*/*/*/*.png
+
+# Documentacion local (no se versiona)
+Documentacion/

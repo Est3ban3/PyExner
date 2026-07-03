@@ -1,32 +1,21 @@
-"""Kernels numericos de la rama ``EPB_TwoFluid`` (modelo 2.5D de dos fluidos).
+# PyExner/solvers/kernels/epb_twofluid.py
+"""Transporte hiperbolico del modelo de dos fluidos (rama EPB_TwoFluid).
 
-FASE 3 — Slice hiperbolico puro (transporte conservativo, SIN fuentes ni solve
-electrostatico). Implementa:
+Aca vive solo la parte conservativa del sistema,
 
-    * Flujos fisicos F(Q) (direccion x) y G(Q) (direccion z).
-    * Velocidades de onda isotermas por fluido.
-    * Flujo numerico HLL aplicado por bloque (iones / electrones desacoplados).
-    * Paso de transporte por volumenes finitos con splitting direccional.
-    * Paso de tiempo CFL real reducido globalmente (MPI.MIN).
+    dQ/dt + dF/dx + dG/dz = 0,
+    Q = [n_i, n_e, j_ix, j_iy, j_iz, j_ex, j_ey, j_ez]
 
-Modelo continuo (sin fuentes en esta fase):
+Las fuentes (colisiones, E, B, g) y el solve de phi van en epb_sources.py;
+prefiero no mezclarlas aca para poder validar cada operador por separado.
 
-    dQ/dt + dF/dx + dG/dz = 0
-
-con Q = [n_i, n_e, j_ix, j_iy, j_iz, j_ex, j_ey, j_ez]^T.
-
-Definicion de velocidades (origen de la asimetria ion/electron por el signo de
-la carga):
-
-    v_i = j_i / (e n_i)        v_e = -j_e / (e n_e)
-
-Cierre isotermo: p_alpha = n_alpha k_B T_alpha (T_alpha constante), de donde las
-velocidades del sonido c_i = sqrt(k_B T_i / M_i) y c_e = sqrt(k_B T_e / M_e) son
-CONSTANTES. Los dos fluidos estan desacoplados en el transporte, por lo que HLL
-se aplica bloque a bloque con sus propias cotas de onda.
-
-Las fuentes rigidas S(Q) (colisiones, electrodinamica) y el solve eliptico de
-phi se incorporan en la Fase 5; el integrador IMEX en la Fase 6.
+Cosas a tener presentes al leer este archivo:
+  - v_i = +j_i/(e n_i) pero v_e = -j_e/(e n_e). El menos del electron viene
+    de definir j_e = -e n_e v_e (densidad de corriente, no de momento); si se
+    pierde ese signo todo lo demas sale mal.
+  - Cierre isotermo p = n kB T, asi que c_i y c_e son constantes del problema.
+  - En el transporte los dos fluidos no se ven entre si: el HLL se aplica por
+    bloque (ion / electron), cada uno con sus propias cotas de onda.
 """
 
 from typing import NamedTuple
@@ -52,12 +41,11 @@ ELE_IDX = (1, 5, 6, 7)   # n_e, j_ex, j_ey, j_ez
 
 
 class EPBPhysParams(NamedTuple):
-    """Parametros fisicos del modelo EPB de dos fluidos (cierre isotermo).
+    """Constantes fisicas del modelo (cierre isotermo).
 
-    Valores por defecto NORMALIZADOS (adimensionales) que dan c_i = c_e = 1, con
-    el fin de validar el transporte de forma limpia. Los valores fisicos reales
-    (SI) se proveen via el bloque ``epb`` del YAML de configuracion (ver
-    ``from_params``); en ese caso conviene float64.
+    Los defaults son adimensionales (dan c_i = c_e = 1) para validar el
+    transporte con numeros comodos. Para correr en SI se cargan desde el
+    bloque ``epb`` del YAML (ver from_params); en ese caso usar float64.
     """
     e: float = 1.0       # carga elemental
     kB: float = 1.0      # constante de Boltzmann
@@ -105,8 +93,8 @@ def unstack_state(arr: jax.Array) -> EPBTwoFluidState:
 def _velocities(arr: jax.Array, phys: EPBPhysParams):
     """Velocidades de ambos fluidos a partir de Q (..., 8).
 
-    Devuelve (vix, viy, viz, vex, vey, vez). Recordar el signo de carga:
-        v_i = +j_i/(e n_i),   v_e = -j_e/(e n_e).
+    Devuelve (vix, viy, viz, vex, vey, vez). Ojo con el signo:
+    v_i = +j_i/(e n_i) pero v_e = -j_e/(e n_e).
     """
     ni = arr[..., 0]
     ne = arr[..., 1]
@@ -174,10 +162,10 @@ def physical_flux(arr: jax.Array, phys: EPBPhysParams, axis: str) -> jax.Array:
 # --------------------------------------------------------------------------- #
 
 def _wave_bounds(arrL, arrR, phys: EPBPhysParams, axis: str):
-    """Cotas de onda por fluido (Davis) para un conjunto de interfaces.
+    """Cotas de onda tipo Davis, por fluido.
 
-    Devuelve (SL, SR) de forma (..., 8): cada componente recibe las cotas del
-    fluido al que pertenece (iones o electrones).
+    Devuelve (SL, SR) de forma (..., 8): cada componente lleva las cotas del
+    fluido al que pertenece (ion en {0,2,3,4}, electron en {1,5,6,7}).
     """
     vixL, _, vizL, vexL, _, vezL = _velocities(arrL, phys)
     vixR, _, vizR, vexR, _, vezR = _velocities(arrR, phys)
@@ -214,19 +202,19 @@ def hll_flux(arrL, arrR, phys: EPBPhysParams, axis: str) -> jax.Array:
 
 
 # --------------------------------------------------------------------------- #
-# Reconstruccion MUSCL de 2do orden (limitador MC, TVD => positiva)            #
+# Reconstruccion MUSCL de 2do orden (limitador MC)                             #
 # --------------------------------------------------------------------------- #
 #
-# El flujo HLL anterior usa reconstruccion CONSTANTE a trozos (1er orden), muy
-# difusivo: borra las plumas afiladas de la EPB y subestima la tasa de
-# crecimiento RT. MUSCL reconstruye un perfil LINEAL por celda con pendiente
-# limitada (TVD). Por ser TVD, los valores reconstruidos en las caras quedan
-# acotados entre los vecinos -> si las densidades de celda son positivas, las
-# densidades reconstruidas tambien lo son (PRESERVA POSITIVIDAD sin floor).
+# El HLL con reconstruccion constante a trozos es muy difusivo: borra las
+# plumas afiladas y subestima el crecimiento RT (lo medi en las pruebas de RT:
+# gamma salia ~0.2x del teorico). MUSCL reconstruye un perfil lineal por celda
+# con pendiente limitada. Al ser TVD, los valores de cara quedan acotados
+# entre vecinos: si las densidades de celda son positivas, las de cara
+# tambien. Positividad gratis, sin floor artificial.
 
 def _minmod3(a: jax.Array, b: jax.Array, c: jax.Array) -> jax.Array:
-    """minmod de tres argumentos: si los tres comparten signo, el de menor
-    magnitud; en caso contrario 0. Base de los limitadores TVD."""
+    """minmod de tres: si comparten signo devuelve el de menor magnitud,
+    si no cero."""
     s = jnp.sign(a)
     same = (s == jnp.sign(b)) & (s == jnp.sign(c))
     mag = jnp.minimum(jnp.minimum(jnp.abs(a), jnp.abs(b)), jnp.abs(c))
@@ -234,12 +222,12 @@ def _minmod3(a: jax.Array, b: jax.Array, c: jax.Array) -> jax.Array:
 
 
 def _mc_slope(Qm: jax.Array, Q0: jax.Array, Qp: jax.Array) -> jax.Array:
-    """Pendiente limitada MC (monotonized central) por celda.
+    """Pendiente MC (monotonized central) de la celda i.
 
-    slope = minmod( (Q_{i+1}-Q_{i-1})/2,  2(Q_i-Q_{i-1}),  2(Q_{i+1}-Q_i) ).
+    slope = minmod( (Q_{i+1}-Q_{i-1})/2,  2(Q_i-Q_{i-1}),  2(Q_{i+1}-Q_i) )
 
-    Menos difusiva que minmod puro conservando la propiedad TVD (limite de
-    Sweby con beta=2). ``Qm, Q0, Qp`` son Q_{i-1}, Q_i, Q_{i+1}.
+    Menos difusiva que minmod puro y sigue siendo TVD (Sweby con beta = 2).
+    Qm, Q0, Qp son Q_{i-1}, Q_i, Q_{i+1}.
     """
     dm = Q0 - Qm        # diferencia hacia atras
     dp = Qp - Q0        # diferencia hacia delante
@@ -282,21 +270,19 @@ def muscl_hll_flux_periodic(Q: jax.Array, phys: EPBPhysParams, axis: str) -> jax
 # --------------------------------------------------------------------------- #
 
 def transport_step_muscl(state: EPBTwoFluidState, dt: float, dx: float, phys: EPBPhysParams) -> EPBTwoFluidState:
-    """Paso de transporte de 2do orden (MUSCL + HLL) en dominio PERIODICO.
+    """Paso de transporte de 2do orden (MUSCL + HLL), dominio periodico.
 
-    Reconstruccion lineal limitada (TVD) EN ESPACIO + integracion SSP-RK2 (Heun)
-    EN TIEMPO. La RK2 fuerte-estabilidad-preservante (SSP) es OBLIGATORIA: con
-    Euler explicito de 1er orden la combinacion 2do-orden-espacial es linealmente
-    INESTABLE (centrada en el limite suave). SSP-RK2 restaura la estabilidad y la
-    propiedad TVD para CFL <= 1, y el orden global ~2.
+    Reconstruccion lineal limitada en espacio + SSP-RK2 (Heun) en tiempo. La
+    RK2 no es opcional: 2do orden espacial con Euler explicito es linealmente
+    inestable (me paso al probarlo, en el limite suave el esquema queda
+    centrado). Como el paso es combinacion convexa de dos Euler TVD, con
+    CFL <= 1 se recupera estabilidad, TVD y positividad de las densidades.
 
-    Mismo splitting direccional y convencion de signos que ``transport_step``.
-    Dominio doblemente periodico (consistente con ``solve_phi``); los contornos
-    fisicos requieren ghost cells (trabajo de produccion).
-
-    TVD + SSP => positividad: el paso es combinacion convexa de pasos Euler TVD,
-    por lo que las densidades reconstruidas siguen acotadas entre vecinos y no
-    aparecen densidades negativas con CFL respetado.
+    Misma convencion de signos que ``transport_step`` (actualizacion no-split:
+    las diferencias de flujo en x y z se acumulan en un solo update). Dominio
+    doblemente periodico, consistente con ``solve_phi``; para contornos
+    fisicos falta la capa de ghost cells, por eso el step_fn de produccion
+    sigue usando el de 1er orden.
     """
     Q = stack_state(state)
     L0 = -_muscl_divergence(Q, phys, dx)
@@ -316,11 +302,12 @@ def _muscl_divergence(Q: jax.Array, phys: EPBPhysParams, dx: float) -> jax.Array
 
 
 def transport_step(state: EPBTwoFluidState, dt: float, dx: float, mask, phys: EPBPhysParams) -> EPBTwoFluidState:
-    """Avanza el transporte hiperbolico un paso dt por volumenes finitos.
+    """Un paso dt de transporte por volumenes finitos (HLL, 1er orden).
 
-    Splitting direccional (x luego z) con flujo HLL. Convencion de signos de
-    divergencia identica a la rama Roe: el flujo sale de la celda izquierda
-    (+) y entra a la derecha (-), de modo que Q^{n+1} = Q^n - (dt/dx) * div.
+    Los barridos en x y z se acumulan en la misma divergencia y se aplica un
+    solo update (esquema no-split, igual que la rama Roe). Convencion de
+    signos: el flujo sale de la celda izquierda (+) y entra a la derecha (-),
+    Q^{n+1} = Q^n - (dt/dx) * div.
     """
     Q = stack_state(state)
 
@@ -346,11 +333,11 @@ def transport_step(state: EPBTwoFluidState, dt: float, dx: float, mask, phys: EP
 
 @partial(jax.jit, static_argnums=(3,))
 def compute_dt_2D(state: EPBTwoFluidState, dx: float, mask: jax.Array, phys: EPBPhysParams) -> float:
-    """Paso de tiempo CFL (sin el factor cfl, que aplica el caller).
+    """dt de CFL local (el factor cfl lo aplica el caller).
 
-    dt = min_celdas( dx / max(|v_i,n| + c_i, |v_e,n| + c_e) ) en x y en z,
-    restringido a celdas activas (no bloqueadas). La reduccion global MPI.MIN
-    la hace ``compute_dt_epb``.
+    dt = min sobre celdas activas de dx / max(|v_n| + c) entre ambos fluidos
+    y ambas direcciones. La reduccion global MPI.MIN la hace compute_dt_epb.
+    Notar que el electron manda: c_e >> c_i en SI.
     """
     arr = stack_state(state)
     vix, _, viz, vex, _, vez = _velocities(arr, phys)
@@ -367,10 +354,10 @@ def compute_dt_2D(state: EPBTwoFluidState, dx: float, mask: jax.Array, phys: EPB
 
 
 def make_halo_exchange(mpi_handler):
-    """Intercambio de halos de 1 celda para subdominios MPI (generico, operativo).
+    """Intercambio de halos de 1 celda entre subdominios MPI.
 
-    Identico en estructura al de las ramas hidraulicas: comunicacion circular
-    west -> north -> east -> south usando mpi4jax dentro de funciones JIT.
+    Misma estructura que en las ramas hidraulicas: ronda circular
+    west -> north -> east -> south con mpi4jax, jiteable.
     """
     neighbors = mpi_handler.neighbors
     comm = mpi_handler.cart_comm

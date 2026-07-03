@@ -1,21 +1,15 @@
-"""Contorno transmisivo (zero-gradient) para la rama ``EPB_TwoFluid``.
+# PyExner/domain/boundaries/epb_transmissive.py
+"""Contorno transmisivo (zero-gradient) para la rama EPB_TwoFluid.
 
-Modelo hiperbolico de dos fluidos (Fase 4). El contorno transmisivo de orden
-cero copia las **8 componentes conservadas** desde la primera celda interior a
-la celda de borde:
+Copia de orden cero: Q_borde = Q_interior, para las 8 componentes. Es la
+opcion conservadora para un outflow hiperbolico: deja salir las ondas sin
+meter informacion espuria. A diferencia del caso SWE aca no se refleja
+ninguna componente de momento; las tres corrientes de ambos fluidos pasan
+tal cual.
 
-    Q_borde = Q_interior
-
-Es la eleccion conservadora para un flujo de salida (outflow) hiperbolico: no
-introduce informacion espuria y deja salir las ondas. A diferencia del caso
-hidraulico (SWE), aqui NO se refleja ninguna componente de momento; las tres
-corrientes (x, y, z) de ambos fluidos se transmiten tal cual, coherente con un
-contorno abierto.
-
-El nombre registrado es ``"EPB_TwoFluid Transmissive"`` (``flux_scheme`` +
-``" "`` + ``type``), de modo que ``BoundaryManager`` lo instancia con
-``mask``, ``normal``, ``boundary_indices`` e ``interior_indices`` (rama
-"Transmissive").
+El nombre registrado sigue la convencion flux_scheme + " " + type
+("EPB_TwoFluid Transmissive"), asi BoundaryManager lo instancia igual que
+cualquier Transmissive.
 """
 
 from dataclasses import dataclass
@@ -37,7 +31,7 @@ class EPB_TransmissiveBoundary:
     boundary_indices: Tuple[jnp.ndarray, jnp.ndarray]   # (y_boundary, x_boundary)
 
     def apply(self, state: EPBTwoFluidState, time: float) -> EPBTwoFluidState:
-        """Copia las 8 componentes de Q de la celda interior a la de borde."""
+        """Q_borde = Q_interior para las 8 componentes."""
         by, bx = self.boundary_indices
         iy, ix = self.interior_indices
 

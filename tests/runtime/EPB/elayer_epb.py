@@ -1,4 +1,4 @@
-"""Paso 5 del camino critico: CAPA E como carga de conductancia (shunt).
+"""Capa E como carga de conductancia (shunt) sobre el solve electrostatico.
 
 Valida el solve electrostatico de COEFICIENTE VARIABLE
 
@@ -11,17 +11,18 @@ por que la EPB es un fenomeno POST-PUESTA-DE-SOL (de dia Sigma_E apantalla).
 
 Bloques:
 
-  A) EQUIVALENCIA: sigma = 1 reproduce ``solve_phi`` del Paso 4 (~maquina).
+  A) EQUIVALENCIA: sigma = 1 reproduce ``solve_phi`` (~maquina).
   B) SHUNT ANALITICO: sigma uniforme = (1+R) => phi = phi_1/(1+R) EXACTO
      (la unica solucion del sistema lineal escalado). Precision de maquina.
   C) LIMPIEZA CON COEFICIENTE VARIABLE: para sigma(x,z) no uniforme el campo
      corregido cumple D^-J - D^-(sigma_f G^+ phi) = residual CG ~ maquina
-     (la garantia del Paso 4 se hereda con coeficiente variable).
-  D) APANTALLAMIENTO DE LA RT: la corrida RT del Nivel 4 con shunt de capa E
-     (sigma = 1 + R: misma linea base, solo se anade la carga) se SUPRIME:
-     con R=3 (F_s = 0.25) el drive diluido cae por debajo del amortiguamiento
-     numerico fijo y el modo se ESTABILIZA (gamma < 0). El shunt cruza el
-     umbral de inestabilidad: el mecanismo dia/noche de la EPB.
+     (la garantia de poisson_epb.py se hereda con coeficiente variable).
+  D) APANTALLAMIENTO DE LA RT: la corrida RT de rt_instability_epb.py con
+     shunt de capa E (sigma = 1 + R: misma linea base, solo se anade la
+     carga) se SUPRIME: con R=3 (F_s = 0.25) el drive diluido cae por debajo
+     del amortiguamiento numerico fijo y el modo se ESTABILIZA (gamma < 0).
+     El shunt cruza el umbral de inestabilidad: el mecanismo dia/noche de la
+     EPB.
 
 Ejecucion (WSL): MPIR_CVAR_ENABLE_GPU=0 python elayer_epb.py
 """
@@ -125,7 +126,7 @@ def test_C_variable_cleaning():
 
 
 # --------------------------------------------------------------------------- #
-# D) Apantallamiento de la RT (corrida del Nivel 4 con cierre sigma = n + R)   #
+# D) Apantallamiento de la RT (corrida RT base con cierre sigma = 1 + R)       #
 # --------------------------------------------------------------------------- #
 
 PHYS = EPBPhysParams(Ti=0.0, Te=0.0)
@@ -179,8 +180,8 @@ def _growth_rate(amps, dt):
 def _run_rt(R_shunt: float):
     src = EPBSourceParams(gz=-G, By=B)
     state0 = _build_rt_state()
-    sigma = jnp.ones((NZR, NXR)) + R_shunt   # Sigma_F uniforme (linea base del
-    # Nivel 4) + shunt: experimento CONTROLADO, solo cambia la carga E.
+    sigma = jnp.ones((NZR, NXR)) + R_shunt   # Sigma_F uniforme (linea base de
+    # rt_instability_epb.py) + shunt: experimento CONTROLADO, solo cambia la carga E.
 
     def _step(s):
         Q = _transport(stack_state(s), DT, DXR, PHYS)
@@ -198,7 +199,7 @@ def _run_rt(R_shunt: float):
 
 def test_D_rt_shielding():
     print(f"[D] RT con shunt de capa E: malla {NXR}x{NZR}, dt={DT:.4f}, "
-          f"{NSTEPS} pasos, sigma = 1 + R (linea base Nivel 4 + shunt)")
+          f"{NSTEPS} pasos, sigma = 1 + R (linea base RT + shunt)")
     results = {}
     for R in (0.0, 3.0):
         amps = _run_rt(R)
@@ -232,7 +233,7 @@ def test_D_rt_shielding():
 
 
 def main():
-    print("=== Paso 5: capa E como carga de conductancia (shunt) ===\n")
+    print("=== Capa E como carga de conductancia (shunt) ===\n")
     ok = True
     ok &= test_A_equivalence()
     ok &= test_B_uniform_shunt()

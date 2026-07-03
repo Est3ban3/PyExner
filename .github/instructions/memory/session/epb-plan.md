@@ -244,3 +244,77 @@ C2/C3 ~7e-12 maquina, C3b verifica checkerboard RESUELTO. Sin regresion: Fase 7 
 IMPACTO RT Nivel 4 (reejecutado, solo nuevo solve): gamma 0.347->0.426, contraste 5.75x->10.4x,
 pico x12->x21, masa/positividad intactas. PENDIENTE produccion: BC Neumann/Dirichlet, CG en MPI
 (halo_exchange por matvec), precondicionador multigrid. Bitacora "Paso 4: solve electrostatico consistente".
+
+## Camino critico — Paso 5: capa E como carga de conductancia COMPLETO
+epb_sources.py seccion nueva (Paso 4 intacto): _face_avg, _div_sigma_grad (L_sigma=D-(sigma_f G+)),
+_poisson_cg_sigma, solve_phi_sigma(arr,sigma,dx,n_iter) con SIGMA_FLOOR=1e-12 (SPD si n->0).
+implicit_source_solve(...,sigma=None): con sigma usa solve_phi_sigma; None conserva camino Paso 4.
+epb_ionosphere.py: shielding_factor F_s=sigma_F/(sigma_F+sigma_E); collisional_growth_rate_shielded.
+Modelo: div(Sigma grad phi)=div(J_drive), Sigma=Sigma_F(x)+Sigma_E; gamma=F_s g/(nu_in L_n)-beta.
+Script tests/runtime/EPB/elayer_epb.py 4 bloques TODOS PASS:
+A equivalencia sigma=1 vs Paso4: 1.1e-14. B shunt uniforme sigma=1+R exacto phi/(1+R): maquina (R=1,3,9).
+C limpieza sigma(x,z): residual 3.5e-10. D RT con shunt R=3 F_s=0.25: gamma 0.230->-0.172 (CRUZA umbral),
+amplitud suprimida 177x = mecanismo dia/noche. RIESGO: media aritmetica de caras (armonica si burbuja
+profunda n->0); residual 1e-10 hereda criterio congelacion CG. Bitacora "Paso 5: capa E ...".
+
+## Camino critico — Paso 6: geometria flux-tube dipolar COMPLETO
+epb_fluxtube.py (NUEVO, HOST-SIDE NumPy, precomputo que alimenta kernels JAX; perfiles reusados de
+epb_ionosphere = unica fuente de verdad): ELayerParams (+ELAYER_NIGHT/DAY, capa E Chapman h_pE=105km
+H_E=6km n_maxE 5e9 noche/1.5e11 dia); nu_in_total (DOS exp: termosfera F escala 40km + base E escala 7km,
+nu(300)~0.5 nu(105)~3e3; corrige extrapolacion mono-exp Paso 2); pedersen_conductivity
+sigma_P=ne/B nu Omega/(nu^2+Omega^2); dipole_line (r=L RE cos^2 lat, B dipolar, trunc h_min=90km);
+flux_tube_quantities (Sigma_P^{F,E}=2 int sigma ds, N_FT, nu_eff, F_s); bottomside_Ln (Chapman analitico),
+gamma_flux_tube, gamma_bottomside_max. Modelo gamma_FT(h_apex)=F_s(tubo) g/(nu_eff L_n)-beta (Sultan, sin viento/V_P).
+Script tests/runtime/EPB/fluxtube_epb.py 4 bloques TODOS PASS:
+A geometria (apex 1e-10, B dipolar 2.7e-16, pie OK); B convergencia trapecio nlat 401->1601 drift 4.1e-6;
+C conductancias 350km Sigma_F 4.5S Sigma_E 0.63/18.8S F_s 0.88->0.19; D umbral.
+RESULTADOS FISICOS: umbral nocturno h_apex~300km (sube vs 252km local Paso2: linea muestrea alturas mas
+colisionales + remanente capa E, direccion correcta); e-folding min nocturno tau=25.8min @ h~340km
+(gamma_max 6.4e-4 vs Sultan 5e-4..1.5e-3); topside estable; supresion diurna tau_min 169min (x6.5).
+RIESGO: ion unico O+ tambien en E (alli NO+/O2+ m~30 factor 2 en sigma_E); sin vientos U_L^P; g,beta en apex.
+Bitacora "Paso 6: geometria flux-tube integrada (dipolar)".
+
+## Camino critico — Paso 7: disparador PRE y onset COMPLETO
+epb_pre.py (NUEVO, HOST-SIDE NumPy, forzante lento escala horas -> E0x(t),R_E(t),perfiles a kernels):
+PREParams ciclo diurno tipo Fejer V(t)=V_day cos(2pi(t-12)/24)+V_pre exp(-(t-t_pre)^2/2w^2)
+(V_day=20,V_pre=30 m/s,t_pre=18.75LT,w=0.5h) + decaimiento logistico capa E en terminador (t_ss=18.2LT tau_E=0.4h);
+vertical_drift, pre_electric_field (E0x=BV), elayer_density, layer_height (dh/dt=V trapecio piso 200km);
+onset_prediction (perfil F desplazado rigido h_peak=h(t), capa E n_E(t), gamma=gamma_bottomside_max Paso6,
+Gamma=int max(gamma,0)dt', onset al cruzar Gamma>=ln(1e3)~6.9 e-folds, semilla 1e-3 estandar Sultan/Huba).
+Script tests/runtime/EPB/pre_onset_epb.py 4 bloques TODOS PASS:
+A drift pico PRE 26.2 m/s @18.71LT (obs 20-60 @18-19:30); B capa F h_max 472km @19.57LT (obs 400-500);
+C ONSET 19.93 LT (obs 19:30-22); D control SIN PRE Gamma a 02LT=0.36 e-folds (vs 15.6 con PRE) -> SIN onset.
+EL CONTRASTE D ES EL RESULTADO CENTRAL: PRE es el disparador. Serie: gamma<0 hasta ~17:30, gamma_max 2.1e-3
+(tau 8min) @20LT capa 465km F_s->1, madrugada gamma<0 (ventana finita). RIESGO: drift empirico suave (no
+Scherliess-Fejer), subida rigida del perfil, criterio 6.9 e-folds supone semilla 0.1%. Morfologia no lineal SI
+IMPRACTICABLE con inercia electronica explicita (CFL electron c_e~1.2e5 ~1e6 pasos/hora) -> requiere cierre
+sin inercia (drift-difusion/vorticidad-potencial), siguiente etapa FUERA del camino critico. Bitacora "Paso 7".
+
+## Adendo — Pluma SI 2D no lineal (plume_si_epb.py, fig5)
+Primera corrida SI fisica: dominio 0-400km zonal x 200-800km altitud (96x144 dx=4.17km), Chapman post-PRE
+(h_mF2=450km), B=2.58e-5T, nu_in=0.05. figures/fig5_pluma_si.png: plumas penetran h_mF2 -> topside ~600km
+en 47min, v_max~250 m/s, deplecion ~5e-2 fondo, ascenso apice ~90 m/s (rangos observados).
+3 LECCIONES NUMERICAS (el adimensional NO extrapola a SI):
+1. Acoplamiento electrostatico LAGGED inestable con sigma_P fisica: resolver div(sigma_P grad phi)=div(J_total)
+   da phi^{n+1}~phi_eq-phi^n (lazo marginal -> explosivo x5/paso dt=6s). CIERRE drive-driven (Ossakow): RHS solo
+   corriente motriz gravitacional J_g=(n Mi g/B)x_hat -> phi diagnostico de n, unico acople temporal = transporte
+   (gamma_RT<<1/dt) estable. implicit_source_solve acepta E_ext para esto.
+2. NO transportar inercia de corrientes en regimen de derivas: Omega_i dt~1e3, el solve implicito regenera j cada
+   paso (j diagnostica); advectar momento 8 campos hace v_f=j_f/(en_f)->inf en la deplecion (explota t~350s). Se
+   advecta SOLO continuidad dt n_s+div(n_s v_s)=0 con deriva por especie (MUSCL escalar, limitador MC).
+3. Regularizaciones FISICAS: (i) piso conductividad sigma_min=sigma_P(0.25 n_max) (sustituto 2D de conductancia FT);
+   (ii) difusion sub-grid D~0.15(g/nu_in)dx (RT colisional gamma indep de k, corta modos de rejilla, Peclet~500
+   escala 50km, tipo Zalesak). Bitacora EPB_CHANGELOG.md "Adendo — Pluma SI 2D no lineal".
+
+## Auditoria de consistencia (2026-06-18)
+Verificado que changelog/codigo/tests COINCIDEN. Todos los kernels documentados existen
+(epb_ionosphere/twofluid/sources/fluxtube/pre). implicit_source_solve(...,sigma=None,E_ext=None) confirmado.
+Bateria reejecutada HOY: 11/11 scripts PASAN (advection,sources,ionosphere,muscl,poisson,elayer,fluxtube,
+pre_onset,rt_instability,smoke + test_epb_twofluid 7/7); plume_si compila + fig5 existe. Resultados coinciden:
+elayer 177x, fluxtube tau 25.8min, onset 19.93LT, RT gamma 0.426 / 10.4x. DISCREPANCIA (esperada, no bug):
+muscl_epb bloque D da hoy 0.157->0.623 (x3.96) vs changelog 0.105->0.531 (x5) porque Paso 4 reescribio solve_phi
+(campo E que usa esa prueba); bloques A/B (transporte puro) sin cambio. CHANGELOG reestructurado: tabla Plan de
+fases corregida (Fases 3-7 Completada), anadido INDICE MAESTRO al inicio (Capa->kernel->script->estado->resultado
++ comando reproducir), listas "Estado camino critico" intermedias marcadas como snapshots historicos, nota MUSCL
+en Paso 3. Pendientes produccion sin cambio (BC no-periodicas+CG MPI, media armonica sigma, cierre sin inercia
+electronica, vientos U_L^P, cablear nu_in(h)/beta(h) a source_fn).

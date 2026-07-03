@@ -1,62 +1,54 @@
-"""Paso 6 del camino critico: geometria DIPOLAR integrada en tubo de flujo.
+# PyExner/solvers/kernels/epb_fluxtube.py
+"""Geometria dipolar integrada en tubo de flujo.
 
-La dinamica perpendicular de la EPB es 2D en el plano ecuatorial (x, z) porque
-la conductividad paralela es enorme: las lineas de B son equipotenciales y cada
-"celda" del plano representa un TUBO DE FLUJO completo. Los coeficientes
-efectivos del modelo 2D (conductancias, contenido, colision efectiva) son
-INTEGRALES a lo largo de la linea dipolar, no valores locales del apex. Este
-modulo construye ese mapeo:
+La dinamica perpendicular de la EPB es 2D en el plano ecuatorial porque la
+conductividad paralela es enorme: cada linea de B es equipotencial, asi que
+cada celda del plano representa un tubo de flujo completo. Los coeficientes
+que alimentan al modelo 2D no son valores locales del apex sino integrales a
+lo largo de la linea dipolar. Este modulo construye ese mapeo:
 
-    h_apex  ->  (Sigma_P^F, Sigma_P^E, N_FT, nu_eff, F_s, gamma_FT)
+    h_apex -> (Sigma_P^F, Sigma_P^E, N_FT, nu_eff, F_s, gamma_FT)
 
---- Geometria dipolar (coordenada: latitud magnetica lambda) ---
+Geometria (coordenada: latitud magnetica lambda), linea con apex h_apex:
 
-Linea con apex a altura h_apex sobre el ecuador:
-
-    L = (RE + h_apex)/RE                      (parametro de McIlwain)
+    L = (RE + h_apex)/RE
     r(lambda)  = L RE cos^2(lambda)
-    h(lambda)  = r - RE
     ds         = L RE cos(lambda) sqrt(1 + 3 sin^2 lambda) dlambda
     B(lambda)  = (B_eq/L^3) sqrt(1 + 3 sin^2 lambda) / cos^6(lambda)
 
-La linea se trunca en h = h_min (~90 km, base de la capa E): por debajo el
-plasma desaparece y el tubo "termina".
+La linea se corta en h_min ~ 90 km (base de la capa E); por debajo ya no hay
+plasma que cuente.
 
---- Conductividad Pedersen (formula completa, valida en regiones E y F) ---
+Conductividad Pedersen (formula completa, vale en E y F):
 
-    sigma_P = (n e / B) * nu_in Omega_i / (nu_in^2 + Omega_i^2),
-    Omega_i = e B / M_i.
+    sigma_P = (n e/B) nu Omega_i / (nu^2 + Omega_i^2),  Omega_i = e B/M_i
 
-En la region F (Omega >> nu): sigma_P ~ n M nu / B^2 (pequena, ~ n nu).
-En la region E (nu ~ Omega): sigma_P maxima — el cortocircuito diurno.
+En la F (Omega >> nu) es chica, ~ n nu; en la E (nu ~ Omega) es maxima: ese
+es el cortocircuito diurno.
 
---- Conductancias y promedios de tubo de flujo ---
+Conductancias y promedios (el factor 2 es por los dos hemisferios):
 
-    Sigma_P^F = 2 int_0^lambda_max sigma_P(n_F) ds     (plasma de la capa F2)
-    Sigma_P^E = 2 int_0^lambda_max sigma_P(n_E) ds     (plasma de la capa E)
-    N_FT      = 2 int n_F ds                            (contenido del tubo)
-    nu_eff    = 2 int n_F nu_in ds / N_FT               (colision ponderada)
-    F_s       = Sigma_F / (Sigma_F + Sigma_E)           (apantallamiento)
+    Sigma_P^{F,E} = 2 int sigma_P ds
+    N_FT   = 2 int n_F ds
+    nu_eff = 2 int n_F nu ds / N_FT
+    F_s    = Sigma_F/(Sigma_F + Sigma_E)
 
---- Tasa de crecimiento RT flux-tube (Sultan 1996, sin vientos ni V_P) ---
+y la tasa RT de tubo de flujo (Sultan 1996, sin vientos ni deriva V_P):
 
-    gamma_FT(h_apex) = F_s g(h_apex) / (nu_eff L_n(h_apex)) - beta(h_apex)
+    gamma_FT(h_apex) = F_s g/(nu_eff L_n) - beta
 
-con L_n del bottomside Chapman ANALITICO: d(ln n)/dh = (e^{-u} - 1)/(2H),
-u = (h - h_peak)/H  =>  L_n = 2H/(e^{-u} - 1) > 0 solo BAJO el pico (el topside
-es RT-estable: gamma = -beta).
+con L_n del bottomside Chapman analitico: L_n = 2H/(e^{-u} - 1), que solo es
+positivo bajo el pico (el topside es RT-estable).
 
-NOTA de implementacion: este modulo es HOST-SIDE (NumPy). Las cantidades de
-tubo de flujo son precomputos/cierres escalares que alimentan los kernels JAX
-(p.ej. el shunt R_E = Sigma_E/Sigma_ref del Paso 5); no viven en el lazo
-temporal jiteado. Los PERFILES se reutilizan de ``epb_ionosphere`` (unica
-fuente de verdad de las formas) y se convierten con ``np.asarray``.
+Nota de implementacion: esto es host-side (NumPy). Son precomputos lentos que
+alimentan a los kernels JAX (p.ej. el shunt R_E del solve con sigma); no van
+dentro del lazo jiteado. Los perfiles se reusan de epb_ionosphere para tener
+una sola fuente de verdad de las formas.
 
-HONESTIDAD: ion unico O+ tambien en la capa E (los iones reales alli son
-NO+/O2+, m ~ 30-32 amu: factor ~2 en Omega_i). nu_in con DOS exponenciales
-(termosfera F + base E) calibradas a nu_in(105 km) ~ 3e3 s^-1 y
-nu_in(300 km) ~ 0.5 s^-1; sin vientos neutros (U = 0) ni deriva vertical V_P
-en gamma (el disparador PRE entra en el Paso 7).
+Simplificaciones asumidas (conscientes): ion unico O+ tambien en la capa E
+(los reales alli son NO+/O2+, factor ~2 en Omega_i); nu_in con dos
+exponenciales (termosfera F + base E) calibradas a nu(105 km) ~ 3e3 s^-1 y
+nu(300 km) ~ 0.5 s^-1; sin vientos neutros; el PRE entra por epb_pre.
 """
 
 from typing import NamedTuple
@@ -75,11 +67,11 @@ from PyExner.solvers.kernels.epb_ionosphere import (
 # --------------------------------------------------------------------------- #
 
 class ELayerParams(NamedTuple):
-    """Capa E ecuatorial (Chapman delgada) + colision ion-neutro de su base.
+    """Capa E ecuatorial (Chapman delgada) + colision de su base.
 
-    Por defecto NOCTURNA (post-atardecer): la capa E recombina rapido tras la
-    puesta de sol (recombinacion disociativa alfa n^2 de NO+/O2+) y queda un
-    remanente debil. El caso DIURNO se obtiene con ``ELAYER_DAY``.
+    Por defecto nocturna: tras la puesta de sol la capa E recombina rapido
+    (recombinacion disociativa de NO+/O2+) y queda un remanente debil. Para
+    el caso diurno esta ELAYER_DAY.
     """
     n_max_E: float = 5.0e9      # densidad de pico de la capa E nocturna [m^-3]
     h_peak_E: float = 105.0e3   # altura del pico de la capa E [m]
@@ -96,12 +88,12 @@ H_MIN = 90.0e3                  # base de la ionosfera: truncado de la linea [m]
 
 
 def nu_in_total(h, fr: FRegionParams, el: ELayerParams):
-    """nu_in(h) de dos exponenciales: termosfera F + base de la capa E.
+    """nu_in(h) con dos exponenciales: termosfera F + base de la capa E.
 
-    El termino F (escala 40 km) reproduce nu_in ~ 0.5 s^-1 a 300 km; el termino
-    E (escala 7 km) reproduce nu_in ~ 3e3 s^-1 a 105 km y es despreciable por
-    encima de ~150 km. Corrige la subestimacion del perfil mono-exponencial del
-    Paso 2 al extrapolarlo a la baja termosfera.
+    El termino F (escala 40 km) da nu ~ 0.5 s^-1 a 300 km; el termino E
+    (escala 7 km) da nu ~ 3e3 s^-1 a 105 km y muere por encima de ~150 km.
+    Con una sola exponencial extrapolada a la baja termosfera nu quedaba
+    ordenes de magnitud corta.
     """
     nu_F = np.asarray(exp_profile(jnp.asarray(h), fr.nu0, fr.h_ref, fr.H_nu))
     nu_E = np.asarray(exp_profile(jnp.asarray(h), el.nuE0, el.h_peak_E, el.H_nuE))
@@ -198,8 +190,9 @@ def flux_tube_quantities(h_apex, fr: FRegionParams = FRegionParams(),
 def bottomside_Ln(h, fr: FRegionParams = FRegionParams()):
     """L_n analitico del bottomside Chapman: L_n = 2H/(e^{-u} - 1), u=(h-hp)/H.
 
-    Positivo solo BAJO el pico (gradiente hacia arriba, RT-inestable con g
-    hacia abajo). Sobre el pico devuelve +inf (topside estable: 1/L_n = 0).
+    Positivo solo bajo el pico (gradiente hacia arriba con g hacia abajo =
+    RT-inestable). Sobre el pico devuelve +inf, o sea 1/L_n = 0: topside
+    estable.
     """
     h = np.asarray(h, dtype=float)
     u = (h - fr.h_peak) / fr.H_chapman
@@ -212,11 +205,11 @@ def bottomside_Ln(h, fr: FRegionParams = FRegionParams()):
 
 def gamma_flux_tube(h_apex, fr: FRegionParams = FRegionParams(),
                     el: ELayerParams = ELAYER_NIGHT, nlat: int = 801):
-    """gamma_FT(h_apex) = F_s g/(nu_eff L_n) - beta  (Sultan reducido, FT).
+    """gamma_FT(h_apex) = F_s g/(nu_eff L_n) - beta (Sultan reducido, FT).
 
-    Devuelve (gamma, ft) con gamma de forma (A,) y ft las cantidades integradas
-    (para diagnostico). g y beta se evaluan en el apex; nu_eff y F_s son del
-    tubo completo.
+    Devuelve (gamma, ft), gamma de forma (A,) y ft las cantidades integradas
+    por si hace falta diagnostico. g y beta van evaluadas en el apex; nu_eff
+    y F_s son del tubo completo.
     """
     ft = flux_tube_quantities(h_apex, fr, el, nlat)
     g_a = np.asarray(gravity(jnp.asarray(ft.h_apex)))
@@ -229,12 +222,12 @@ def gamma_flux_tube(h_apex, fr: FRegionParams = FRegionParams(),
 def gamma_bottomside_max(fr: FRegionParams = FRegionParams(),
                          el: ELayerParams = ELAYER_NIGHT,
                          n_apex: int = 9, span=(0.5, 3.0), nlat: int = 401):
-    """Maximo de gamma_FT sobre apexes del bottomside [hp - s1 H, hp - s0 H].
+    """Maximo de gamma_FT barriendo apexes del bottomside [hp-s1 H, hp-s0 H].
 
-    El gradiente relativo crece hacia abajo pero el drive cae con nu_eff y la
-    estabilidad la fija el balance: se barre el bottomside y se toma el max.
-    Devuelve (gamma_max, h_apex_max). Es el gamma "del perfil" usado por el
-    disparador PRE (Paso 7).
+    Bajando el gradiente relativo mejora pero nu_eff sube, asi que el maximo
+    lo decide el balance: se barre y se toma el mejor. Devuelve
+    (gamma_max, h_apex_max). Es el gamma "del perfil" que consume el
+    disparador PRE.
     """
     s0, s1 = span
     h_apexes = fr.h_peak - np.linspace(s0, s1, n_apex) * fr.H_chapman

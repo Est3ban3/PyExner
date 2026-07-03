@@ -1,13 +1,12 @@
-"""Smoke test end-to-end de la rama ``EPB_TwoFluid`` por el driver completo.
+"""Smoke test end-to-end de la rama EPB_TwoFluid por el driver completo.
 
-NIVEL 1 de la escalera de validacion fisica: ejercita el unico camino que las
-pruebas unitarias de la Fase 7 NO cubrian: el ``driver`` real
-(lectura PnetCDF de 8 campos -> bucle IMEX -> escritura PnetCDF), con el solver
-``EPB_TwoFluid``, el integrador ``IMEX`` y los contornos transmisivos EPB.
+Ejercita el unico camino que los tests unitarios no tocan: el driver real
+(lectura PnetCDF de 8 campos -> bucle IMEX -> escritura PnetCDF), con el
+solver EPB_TwoFluid, el integrador IMEX y los contornos transmisivos.
 
-NO valida fisica no trivial (eso son los niveles 2+): solo confirma que el
-cableado completo corre, conserva masa y no produce NaN/Inf ni densidades
-negativas en una evolucion corta.
+No valida fisica no trivial (para eso estan los demas scripts de esta
+carpeta): solo confirma que el cableado completo corre, conserva masa y no
+produce NaN/Inf ni densidades negativas en una evolucion corta.
 
 Geometria 2.5D (x = horizontal, z = "y" del fichero). Estado inicial: plasma
 casi uniforme (n_i = n_e = 1) con un bulto gaussiano de densidad que genera un
@@ -98,7 +97,8 @@ def build_input():
 def build_config():
     eps = 0.1 * DH
     # Bandas de contorno de UN paso de malla de ancho, dimensionadas para capturar
-    # el anillo exterior de centros de celda (ver hallazgo Fase 7).
+    # el anillo exterior de centros de celda (con bandas mas finas quedan celdas
+    # de borde sin cubrir; me paso al probarlo).
     boundaries = {
         "west": {
             "type": "Transmissive",

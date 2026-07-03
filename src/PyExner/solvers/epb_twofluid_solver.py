@@ -1,24 +1,16 @@
-"""Solver bundle de la rama ``EPB_TwoFluid`` (modelo 2.5D de dos fluidos).
+# PyExner/solvers/epb_twofluid_solver.py
+"""Solver bundle de la rama EPB_TwoFluid.
 
-ESTADO DE IMPLEMENTACION (Fase 2 — esqueleto / wiring):
+Conecta el modelo de dos fluidos al framework con el mismo contrato que las
+ramas hidraulicas (config / mask / init / step / dt), mas un ``source_fn``
+que el integrador IMEX invoca despues del transporte:
 
-Este bundle registra el camino funcional ``flux_scheme: EPB_TwoFluid`` dentro
-del framework (estado + solver + integrador + I/O), pero el nucleo numerico es
-todavia un placeholder:
+    step_fn   : transporte HLL explicito + halos + contornos
+    source_fn : fuentes rigidas implicitas (colisiones, B, E) + halos + contornos
 
-    * ``step_fn``        : intercambia halos y aplica contornos, pero el paso de
-                           transporte (``transport_step``) es identidad. No hay
-                           flujos hiperbolicos ni fuentes todavia.
-    * ``compute_dt_fn``  : usa el dt de referencia placeholder del kernel.
-
-Las piezas fisicas se implementan en fases posteriores:
-    * Fase 3: flujos hiperbolicos F(Q), G(Q) + velocidades de onda + CFL real.
-    * Fase 4: contornos transmisivos e I/O de los 8 campos.
-    * Fase 5: operador de fuentes rigidas S(Q) + solve eliptico de phi.
-    * Fase 6: integrador IMEX.
-
-La separacion entre transporte, fuentes y solve electrostatico se mantiene
-estricta desde el esqueleto.
+El transporte de produccion es el de 1er orden (el MUSCL periodico existe en
+el kernel pero necesita ghost cells para contornos fisicos, asi que todavia
+no esta cableado aca).
 """
 
 import jax
@@ -44,10 +36,9 @@ from PyExner.solvers.registry import SolverConfig, SolverBundle, register_solver
 def get_mask(state, mpi_handler, b_mask):
     """Mascara de celdas bloqueadas + mascara de contorno.
 
-    Devuelve ``stack([blocked, b_mask])`` para ser compatible con el contrato
-    del integrador (que usa ``mask[0]`` para la escritura de salida). La
-    semantica fina de la mascara se finaliza en la Fase 3 junto con el solver
-    hiperbolico.
+    Devuelve stack([blocked, b_mask]): el integrador usa mask[0] para la
+    escritura de salida. Se bloquea el anillo exterior del dominio global
+    (solo en los rangos que tocan el borde), salvo donde hay contorno.
     """
     blocked = jnp.zeros_like(state.n_i, dtype=bool)
 
@@ -91,13 +82,11 @@ def init_fn_epb(state: EPBTwoFluidState, mask, config: SolverConfig) -> EPBTwoFl
 
 @partial(jax.jit, static_argnums=(4,))
 def step_fn_epb(state: EPBTwoFluidState, time: float, dt: float, mask, config: SolverConfig) -> EPBTwoFluidState:
-    # Paso 1: transporte hiperbolico HLL (slice puro — Fase 3).
+    # Transporte hiperbolico explicito.
     state = transport_step(state, dt, config.dx, mask, config.phys)
 
-    # Paso 2: sincronizar halos de las 8 componentes conservadas.
+    # Halos de las 8 componentes y contornos (deben ser puros para el jit).
     state = halo_exchange_all(state, config.halo_exchange)
-
-    # Paso 3: aplicar condiciones de contorno (debe ser puro).
     state = config.boundaries.apply(state, time)
 
     return state
@@ -111,12 +100,11 @@ def compute_dt_epb(state: EPBTwoFluidState, cfl: float, mask: jax.Array, config:
 
 @partial(jax.jit, static_argnums=(4,))
 def source_fn_epb(state: EPBTwoFluidState, time: float, dt: float, mask, config: SolverConfig) -> EPBTwoFluidState:
-    """Parte implicita del IMEX: solve rigido de fuentes + halo + contornos.
+    """Parte implicita del IMEX.
 
-    Resuelve localmente (I - dt A) j = j + dt b (colisiones + magnetica
-    implicitas, campo electrico lagged via solve eliptico). Mantiene la
-    separacion: el transporte ya se aplico en ``step_fn``; aqui solo actuan las
-    fuentes y se re-sincroniza el halo / contorno.
+    Resuelve por celda (I - dt A) j = j + dt b (colisiones y giro implicitos,
+    E congelado via el solve eliptico) y re-sincroniza halos y contornos. El
+    transporte ya paso por step_fn; aca solo actuan las fuentes.
     """
     state = implicit_source_solve(state, dt, config.phys, config.src, config.dx)
     state = halo_exchange_all(state, config.halo_exchange)

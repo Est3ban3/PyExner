@@ -1,9 +1,9 @@
-"""Paso 7 del camino critico: disparador PRE y prediccion del onset de la EPB.
+"""Disparador PRE y prediccion del onset de la EPB (``epb_pre``).
 
-Valida ``epb_pre``: el ciclo diurno del drift vertical con el realce
-pre-inversion (PRE), el decaimiento de la capa E al atardecer, la subida de la
-capa F y el crecimiento RT acumulado. El resultado CONCRETO y comparable con
-observaciones es la HORA LOCAL DEL ONSET de la burbuja.
+Valida el ciclo diurno del drift vertical con el realce pre-inversion (PRE),
+el decaimiento de la capa E al atardecer, la subida de la capa F y el
+crecimiento RT acumulado. El resultado CONCRETO y comparable con observaciones
+es la HORA LOCAL DEL ONSET de la burbuja.
 
 Bloques (todos contra rangos observacionales, no contra numeros ajustados):
 
@@ -108,7 +108,7 @@ def test_D_control_no_pre(cast_pre):
 
 
 def main():
-    print("=== Paso 7: disparador PRE y onset de la EPB ===\n")
+    print("=== Disparador PRE y onset de la EPB ===\n")
     ok = True
     ok &= test_A_drift()
     cast = onset_prediction(P)

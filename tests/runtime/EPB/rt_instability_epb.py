@@ -1,11 +1,11 @@
-"""Nivel 4 de validacion fisica: INESTABILIDAD DE INTERCAMBIO (RT generalizada).
+"""Inestabilidad de intercambio (RT generalizada): el test fuerte del modelo.
 
-Prueba culminante: comprueba que el acoplamiento g - grad(n) - E (la polarizacion
-que resuelve ``solve_phi``) produce la dinamica de la Burbuja de Plasma
-Ecuatorial (EPB). Es CUALITATIVA (no hay solucion cerrada) y su check principal
-es el CONTRASTE entre un estado con gradiente de densidad (energia libre
-gravitacional) y un control uniforme, que solo depende del SIGNO del mecanismo,
-no de un valor numerico fragil.
+Comprueba que el acoplamiento g - grad(n) - E (la polarizacion que resuelve
+``solve_phi``) produce la dinamica de la Burbuja de Plasma Ecuatorial (EPB).
+Es CUALITATIVO (no hay solucion cerrada) y su check principal es el CONTRASTE
+entre un estado con gradiente de densidad (energia libre gravitacional) y un
+control uniforme, que solo depende del SIGNO del mecanismo, no de un valor
+numerico fragil.
 
 --- Modelo (plasma frio, modelo RT canonico de plasma) ---
 
@@ -45,7 +45,7 @@ media:
 (1) CONTRASTE: A(t) = Σ (n - <n>_x)^2 crece >5x en el estratificado y NO crece
     (decae) en el uniforme. Check duro: aisla el papel del gradiente de densidad.
 (2) γ del orden de sqrt(g/L_n) (diagnostico informativo, tolerancia amplia por la
-    contaminacion par/impar del solve detectada en el Nivel 3 y la difusion del
+    contaminacion par/impar del solve vista en sources_epb.py y la difusion del
     upwind HLL).
 (3) Positividad mantenida en la fase lineal.
 
@@ -210,7 +210,7 @@ def _growth_rate(amps, dt):
 # --------------------------------------------------------------------------- #
 
 def main():
-    print("=== Nivel 4: inestabilidad de intercambio (RT generalizada) ===")
+    print("=== Inestabilidad de intercambio (RT generalizada) ===")
     print(f"malla {NX}x{NZ}  dx={DX:.4f}  dt={DT:.4f}  pasos={NSTEPS}  "
           f"g={G} B={B} L_n~{WIDTH}")
     print(f"deriva gravitacional v_g ~ {V_CHAR:.3f}, "
@@ -271,7 +271,7 @@ def main():
     else:
         print("[PASS] positividad mantenida")
 
-    print("\n" + ("NIVEL 4 PASSED" if ok else "NIVEL 4 FAILED"))
+    print("\n" + ("RT PASSED" if ok else "RT FAILED"))
     return 0 if ok else 1
 
 

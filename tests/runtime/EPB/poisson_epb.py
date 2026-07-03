@@ -1,10 +1,11 @@
-"""PASO 4 (camino critico EPB) — Solve electrostatico de produccion.
+"""Solve electrostatico de produccion: tripleta consistente + CG.
 
-Valida la TRIPLETA DE OPERADORES CONSISTENTE y el solver de gradiente conjugado
-(CG) que sustituyen al Jacobi + gradiente central de la Fase 5. El hallazgo del
-Nivel 3 fue que mezclar el laplaciano de 5 puntos del solve con un gradiente
-CENTRAL para construir E producia un modo "checkerboard" (desacoplamiento
-par/impar) con divergencia residual O(1e-2): ``div_c o grad_c != L_5pt``.
+Valida la TRIPLETA DE OPERADORES CONSISTENTE y el solver de gradiente
+conjugado (CG) que sustituyeron al Jacobi + gradiente central original. El
+hallazgo (en sources_epb.py) fue que mezclar el laplaciano de 5 puntos del
+solve con un gradiente CENTRAL para construir E producia un modo
+"checkerboard" (desacoplamiento par/impar) con divergencia residual O(1e-2):
+``div_c o grad_c != L_5pt``.
 
 Fix de produccion (operadores que cumplen D^- G^+ = L_5pt EXACTO):
 
@@ -116,7 +117,7 @@ def test_divergence_cleaning():
     dphidz_c = _central_diff(phi, dx, 0)
     Jx_old = Jx - dphidx_c
     Jz_old = Jz - dphidz_c
-    # divergencia central del campo corregido (como medina la Fase 5 vieja)
+    # divergencia central del campo corregido (como lo media el esquema viejo)
     div_old = float(jnp.max(jnp.abs(
         _central_diff(Jx_old, dx, 1) + _central_diff(Jz_old, dx, 0))))
     red_old = div_old / max(div0, 1e-30)
@@ -235,7 +236,7 @@ def test_checkerboard_control():
 
 
 if __name__ == "__main__":
-    print("=== PASO 4: solve electrostatico consistente (operadores + CG) ===")
+    print("=== Solve electrostatico consistente (operadores + CG) ===")
     results = [
         test_operator_identity(),
         test_divergence_cleaning(),

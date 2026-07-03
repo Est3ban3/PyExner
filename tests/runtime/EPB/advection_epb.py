@@ -1,9 +1,8 @@
-"""Nivel 2 de validacion fisica: ADVECCION PURA con solucion analitica exacta.
+"""Adveccion pura con solucion analitica exacta.
 
-Aisla el nucleo del transporte hiperbolico (``physical_flux`` + ``hll_flux``) de
-los artefactos de contorno detectados en el Nivel 1, usando un dominio
-PERIODICO (via ``jnp.roll``) y una configuracion fisica que admite solucion
-cerrada:
+Aisla el nucleo del transporte hiperbolico (``physical_flux`` + ``hll_flux``)
+sin contornos de por medio, usando un dominio PERIODICO (via ``jnp.roll``) y
+una configuracion fisica que admite solucion cerrada:
 
 PLASMA FRIO (isotermo con T_i = T_e = 0  =>  c_i = c_e = 0). Sin presion, el
 sistema isotermo de dos fluidos se reduce a dinamica de gases sin presion. Con
@@ -195,7 +194,7 @@ def test_positivity_and_mass():
 
 
 if __name__ == "__main__":
-    print("=== Nivel 2: adveccion pura (plasma frio, dominio periodico) ===")
+    print("=== Adveccion pura (plasma frio, dominio periodico) ===")
     results = [
         test_sign_directions(),
         test_convergence_order(),

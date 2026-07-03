@@ -1,22 +1,17 @@
-"""Estado conservado del modelo EPB de dos fluidos (rama ``EPB_TwoFluid``).
+# PyExner/state/epb_twofluid_state.py
+"""Estado conservado del modelo de dos fluidos (rama EPB_TwoFluid).
 
-Modelo 2.5D de Burbujas de Plasma Ecuatoriales con formulacion hiperbolica de
-dos fluidos. El vector de estado conservado, en el orden FISICO exacto que debe
-respetarse en kernels, registros, I/O y pruebas, es:
+El vector conservado, en el orden que usa TODO el resto (kernels, registros,
+I/O, pruebas), es:
 
-    Q = [ n_i, n_e, j_ix, j_iy, j_iz, j_ex, j_ey, j_ez ]^T
+    Q = [ n_i, n_e, j_ix, j_iy, j_iz, j_ex, j_ey, j_ez ]
 
-donde:
-    n_i, n_e          densidades de numero de iones y electrones
-    j_i{x,y,z}        componentes del flujo de momento ionico
-    j_e{x,y,z}        componentes del flujo de momento electronico
+densidades de numero y densidades de corriente por especie. Si alguna vez se
+cambia este orden hay que tocar EPB_FIELD_ORDER y nada mas: es la unica
+fuente de verdad del layout.
 
-Geometria: plano discretizado (x, z) (2.5D); las tres componentes de corriente
-se transportan, pero solo x y z se discretizan espacialmente.
-
-Cierre: isotermo, p_alpha = n_alpha k_B T_alpha (la fisica de presion y fuentes
-se introduce en fases posteriores; este estado solo almacena las variables
-conservadas).
+Geometria 2.5D: se discretiza el plano (x, z) pero las corrientes llevan sus
+tres componentes (la y entra por j x B).
 """
 
 from dataclasses import dataclass, replace as dc_replace
@@ -27,8 +22,7 @@ import jax.numpy as jnp
 from PyExner.state.registry import register_state
 
 
-# Orden canonico de las componentes conservadas de Q. Es la unica fuente de
-# verdad del layout; kernels, I/O y pruebas deben referenciar este orden.
+# Orden canonico de las componentes de Q. No reordenar sin revisar kernels e I/O.
 EPB_FIELD_ORDER = (
     "n_i",
     "n_e",
@@ -80,11 +74,7 @@ class EPBTwoFluidState:
         return dc_replace(self, **kwargs)
 
     def to_host(self) -> "EPBTwoFluidState":
-        """Materializa todas las componentes en host (NumPy) para I/O.
-
-        El estado es un pytree de JAX, por lo que ``tree_map`` recorre las 8
-        componentes conservadas en el orden canonico.
-        """
+        """Baja las 8 componentes a NumPy (host) para el I/O paralelo."""
         return jax.tree_util.tree_map(jax.device_get, self)
 
 

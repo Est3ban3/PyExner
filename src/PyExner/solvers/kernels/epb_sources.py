@@ -1,41 +1,26 @@
-"""Operador de fuentes rigidas y solve electrostatico (rama ``EPB_TwoFluid``).
+# PyExner/solvers/kernels/epb_sources.py
+"""Fuentes rigidas S(Q) y solve electrostatico (rama EPB_TwoFluid).
 
-FASE 5 — Fuentes S(Q) y acoplamiento electrostatico (potencial de polarizacion).
+Separado a proposito del kernel de transporte (epb_twofluid.py): el paso
+hiperbolico no tiene por que saber nada de colisiones ni del solve de phi.
 
-Este modulo es DELIBERADAMENTE SEPARADO del kernel de transporte
-(``epb_twofluid.py``): el paso hiperbolico no debe mezclar la dinamica de
-transporte con colisiones ni con el solve de phi (principio de separacion del
-plan de extension).
+Las variables j_alpha son densidades de CORRIENTE (j_i = e n_i v_i,
+j_e = -e n_e v_e). Multiplicando la ecuacion de momento de cada especie por
+q_alpha/M_alpha (el mismo escalado que mete el +-(e/M) p en el flujo) queda:
 
-Contenido:
-    * ``EPBSourceParams``  : parametros de fondo (g, E_0, B, U, nu_in, nu_en, nu_ei).
-    * ``source_term``      : vector fuente S(Q) (filas de continuidad = 0).
-    * ``solve_phi``        : solve eliptico de Poisson para el potencial de
-                             polarizacion (estilo proyeccion, ∇²φ = ∇·J).
-    * ``electric_field``   : E = E_0 - ∇φ (solo corrige E_x, E_z; E_y fuera del plano).
+    S_{j_i} =  e n_i g + (e^2 n_i / M_i) E + (e/M_i) j_i x B
+               - nu_in (j_i - e n_i U)
+    S_{j_e} = -e n_e g + (e^2 n_e / M_e) E - (e/M_e) j_e x B
+               - nu_en (j_e + e n_e U) - nu_ei (j_e + (n_e/n_i) j_i)
 
-Modelo continuo de las fuentes (las filas de continuidad NO tienen fuente):
+con q_i = +e, q_e = -e. Las filas de continuidad no llevan fuente (la quimica
+va aparte, en epb_ionosphere.py).
 
-    Las variables transportadas j_alpha son densidades de CORRIENTE
-    (j_i = e n_i v_i,  j_e = -e n_e v_e). La ecuacion de momento de cada especie
-    multiplicada por q_alpha/M_alpha (mismo escalado que el flujo ±(e/M)p) da:
+El acoplamiento electrostatico es tipo proyeccion: se pide div(J) = 0 con
+J = j_i + j_e (componentes del plano x,z), se resuelve lap(phi) = div(J) y el
+campo efectivo es E = E_0 - grad(phi).
 
-        S_{j_i} =  e n_i g + (e^2 n_i / M_i) E + (e/M_i) j_i × B
-                   - nu_in (j_i - e n_i U)
-        S_{j_e} = -e n_e g + (e^2 n_e / M_e) E - (e/M_e) j_e × B
-                   - nu_en (j_e + e n_e U) - nu_ei (j_e + (n_e/n_i) j_i)
-
-    con q_i = +e, q_e = -e.
-
-Acoplamiento electrostatico (estilo proyeccion):
-
-    Se impone continuidad de corriente ∇·J = 0 con J = j_i + j_e (componentes en
-    el plano x,z). Resolviendo ∇²φ = ∇·J se obtiene el potencial de
-    polarizacion, y el campo efectivo es E = E_0 - ∇φ.
-
-Orden de actualizacion previsto (la integracion rigida es la Fase 6 / IMEX):
-
-    transporte  ->  solve φ (desde el estado)  ->  E = E_0 - ∇φ  ->  fuentes
+Orden de un paso completo: transporte -> solve phi -> E -> fuentes implicitas.
 """
 
 from typing import NamedTuple
@@ -53,12 +38,11 @@ from PyExner.solvers.kernels.epb_twofluid import (
 
 
 class EPBSourceParams(NamedTuple):
-    """Parametros de fondo del operador de fuentes (electrodinamica + colisiones).
+    """Campos de fondo y frecuencias de colision del operador de fuentes.
 
-    Geometria 2.5D (plano x,z): los vectores de fondo tienen tres componentes,
-    pero solo x y z se discretizan espacialmente. Valores por defecto NULOS
-    (sin fuentes) para que el transporte puro de la Fase 3 sea el caso por
-    defecto y no se altere ningun resultado previo.
+    Geometria 2.5D: los vectores tienen tres componentes pero solo x y z se
+    discretizan. Todo en cero por defecto, asi el transporte puro sigue
+    siendo el caso base y no se altera nada de lo ya validado.
     """
     # Gravedad g = (gx, gy, gz)
     gx: float = 0.0
@@ -123,9 +107,8 @@ class EPBSourceParams(NamedTuple):
 def source_term(arr: jax.Array, phys: EPBPhysParams, src: EPBSourceParams, E: jax.Array) -> jax.Array:
     """Vector fuente S(Q) de forma (..., 8) en el orden canonico.
 
-    Las filas de continuidad (n_i, n_e) son CERO: las fuentes solo actuan sobre
-    las densidades de corriente. ``E`` es el campo electrico efectivo por celda,
-    de forma (..., 3) (tipicamente E = E_0 - ∇φ).
+    Las filas de continuidad van en cero: las fuentes solo tocan corrientes.
+    ``E`` es el campo efectivo por celda, (..., 3), tipicamente E_0 - grad(phi).
     """
     ni = arr[..., 0]
     ne = arr[..., 1]
@@ -172,12 +155,11 @@ def source_term(arr: jax.Array, phys: EPBPhysParams, src: EPBSourceParams, E: ja
 # --------------------------------------------------------------------------- #
 
 def _central_diff(field: jax.Array, dx: float, axis: int) -> jax.Array:
-    """Derivada central de 2do orden con bordes periodicos.
+    """Derivada central de 2do orden, bordes periodicos.
 
-    OBSOLETA para el solve electrostatico (introduce desacoplamiento par/impar:
-    ``div_c o grad_c`` != laplaciano de 5 puntos). Se conserva por compatibilidad
-    de diagnostico; el solve de produccion usa la tripleta consistente
-    ``_div_backward`` / ``_grad_forward`` / ``_laplacian`` (Paso 4).
+    Ya no se usa en el solve electrostatico: la central no compone bien con el
+    laplaciano de 5 puntos (div_c o grad_c != L_5) y eso generaba el modo
+    checkerboard. La dejo solo como herramienta de diagnostico.
     """
     fwd = jnp.roll(field, -1, axis=axis)
     bwd = jnp.roll(field, 1, axis=axis)
@@ -185,16 +167,16 @@ def _central_diff(field: jax.Array, dx: float, axis: int) -> jax.Array:
 
 
 # --------------------------------------------------------------------------- #
-# Tripleta de operadores CONSISTENTE (Paso 4): D^- G^+ = L_5pt exacto.         #
+# Tripleta de operadores consistente: D^- G^+ = L_5 exacto.                    #
 #                                                                             #
-#   grad forward   G^+ f|_i  = (f_{i+1} - f_i)/dx        (cara i+1/2)          #
-#   div  backward  D^- u|_i  = (u_i - u_{i-1})/dx        (adjunta de -G^+)     #
-#   laplaciano     L  = D^- G^+  =>  (f_{i+1}-2f_i+f_{i-1})/dx^2  (5 puntos)   #
+#   grad forward   G^+ f|_i = (f_{i+1} - f_i)/dx        (vive en la cara)      #
+#   div  backward  D^- u|_i = (u_i - u_{i-1})/dx        (adjunta de -G^+)      #
+#   laplaciano     L = D^- G^+ = (f_{i+1} - 2 f_i + f_{i-1})/dx^2              #
 #                                                                             #
-# Con esta tripleta la limpieza de divergencia es EXACTA a precision de        #
-# maquina: D^-(J - G^+ phi) = D^-J - L phi = residual del CG ~ 0. Esto elimina #
-# el modo checkerboard que aparecia al mezclar laplaciano de 5 puntos con      #
-# gradiente central (hallazgo del Nivel 3).                                    #
+# Con esto la limpieza de divergencia es exacta a precision de maquina:       #
+#   D^-(J - G^+ phi) = D^- J - L phi = residual del CG ~ 0.                    #
+# Aprendido a la mala: mezclar laplaciano de 5 puntos con gradiente central   #
+# desacopla pares e impares y phi sale con checkerboard.                      #
 # --------------------------------------------------------------------------- #
 
 def _grad_forward(field: jax.Array, dx: float, axis: int) -> jax.Array:
@@ -208,10 +190,10 @@ def _div_backward(field: jax.Array, dx: float, axis: int) -> jax.Array:
 
 
 def _laplacian(field: jax.Array, dx: float) -> jax.Array:
-    """Laplaciano compacto de 5 puntos = D^- G^+ (axis 0 = z, axis 1 = x).
+    """Laplaciano de 5 puntos (axis 0 = z, axis 1 = x).
 
-    Identidad EXACTA con la tripleta consistente:
-        _div_backward(_grad_forward(f, x), x) + _div_backward(_grad_forward(f, z), z).
+    Coincide EXACTAMENTE con D^-(G^+ f) en ambas direcciones; esa identidad
+    es la que hace consistente todo el solve.
     """
     up = jnp.roll(field, -1, axis=0)
     down = jnp.roll(field, 1, axis=0)
@@ -221,10 +203,10 @@ def _laplacian(field: jax.Array, dx: float) -> jax.Array:
 
 
 def _poisson_divergence(arr: jax.Array, dx: float) -> jax.Array:
-    """RHS del Poisson: ∇·J con divergencia BACKWARD consistente.
+    """RHS del Poisson: div(J) con la divergencia backward.
 
-    J = j_i + j_e en el plano (x = indice 2/5, z = indice 4/7). Se proyecta al
-    subespacio de media cero (compatibilidad del sistema singular periodico).
+    J = j_i + j_e en el plano (x: indices 2 y 5; z: 4 y 7). Se le quita la
+    media porque el sistema periodico solo es compatible con RHS de media cero.
     """
     Jx = arr[..., 2] + arr[..., 5]   # jix + jex
     Jz = arr[..., 4] + arr[..., 7]   # jiz + jez
@@ -234,18 +216,17 @@ def _poisson_divergence(arr: jax.Array, dx: float) -> jax.Array:
 
 @partial(jax.jit, static_argnums=(2,))
 def _poisson_cg(rhs: jax.Array, dx: float, n_iter: int) -> jax.Array:
-    """Gradiente conjugado para -L φ = -rhs, con L el laplaciano de 5 puntos.
+    """Gradiente conjugado para -L phi = -rhs (L = laplaciano de 5 puntos).
 
-    El operador A = -L es simetrico semidefinido positivo (nucleo = constantes
-    bajo BC periodicas). Se trabaja en el subespacio de media cero proyectando
-    A p -> A p - <A p> en cada producto matriz-vector, y se fija el gauge
-    <φ> = 0 al final. CG converge en pocas iteraciones (mucho mejor que Jacobi)
-    y es jit-able con ``fori_loop`` de longitud estatica.
+    A = -L es simetrica y semidefinida positiva; el nucleo son las constantes
+    (BC periodicas), asi que se trabaja en media cero (se proyecta A p en cada
+    matvec) y al final se fija el gauge <phi> = 0. n_iter es estatico para que
+    el fori_loop sea jiteable.
 
-    Robustez: una vez convergido (residual relativo < 1e-12) la iteracion se
-    CONGELA (alpha=beta=0). Sin esto, iterar de mas tras la convergencia divide
-    por ~0 y desestabiliza la solucion; con la congelacion, sobre-especificar
-    ``n_iter`` es inocuo.
+    Detalle importante: cuando el residual relativo baja de 1e-12 la iteracion
+    se congela (alpha = beta = 0). Si se sigue iterando despues de converger
+    se termina dividiendo por ~0 y la solucion se ensucia; con la congelacion
+    puedo sobredimensionar n_iter sin miedo.
     """
     def Aop(p):
         ap = -_laplacian(p, dx)
@@ -262,8 +243,7 @@ def _poisson_cg(rhs: jax.Array, dx: float, n_iter: int) -> jax.Array:
         phi, r, p, rs = carry
         Ap = Aop(p)
         denom = jnp.sum(p * Ap)
-        # Activo solo mientras NO se ha convergido (residual relativo) y el
-        # denominador es positivo (curvatura util).
+        # Solo iterar mientras no haya convergido y la curvatura sea util.
         active = (rs > 1e-24 * rs0) & (denom > 1e-300)
         alpha = jnp.where(active, rs / jnp.where(denom > 0.0, denom, 1.0), 0.0)
         phi = phi + alpha * p
@@ -280,33 +260,29 @@ def _poisson_cg(rhs: jax.Array, dx: float, n_iter: int) -> jax.Array:
 
 @partial(jax.jit, static_argnums=(2,))
 def solve_phi(arr: jax.Array, dx: float, n_iter: int) -> jax.Array:
-    """Potencial de polarizacion φ resolviendo ∇²φ = ∇·J (estilo proyeccion).
+    """Potencial de polarizacion: resuelve lap(phi) = div(J), estilo proyeccion.
 
-    Paso 4 (produccion): tripleta de operadores CONSISTENTE
-    (``_div_backward`` / ``_grad_forward`` / laplaciano de 5 puntos) resuelta por
-    gradiente conjugado. ``n_iter`` es el numero (estatico) de iteraciones de CG.
-    Convencion de ejes: axis 1 = x, axis 0 = z. BC periodicas (``jnp.roll``).
+    Tripleta consistente (D^- / G^+ / L_5) + CG. Ejes: axis 1 = x, axis 0 = z.
+    BC periodicas (todo con jnp.roll).
 
-    Garantia clave: el campo corregido J - ∇φ (con ∇ = ``_grad_forward``) es
-    DIVERGENTE-LIBRE a precision de maquina en el sentido de ``_div_backward``,
-    porque D^-(J - G^+φ) = rhs - Lφ = residual del CG. No hay modo checkerboard.
+    La garantia que importa: la corriente corregida J - G^+ phi queda libre de
+    divergencia (en el sentido D^-) a precision de maquina, porque
+    D^-(J - G^+ phi) = rhs - L phi = residual del CG. Nada de checkerboard.
 
-    NOTA: para contornos fisicos no periodicos (Neumann/Dirichlet) o un dominio
-    distribuido en MPI, el CG debe intercalar ``halo_exchange`` en cada producto
-    matriz-vector y ajustar el operador en los bordes; la tripleta consistente y
-    el solver CG no cambian.
+    Pendiente para produccion: contornos no periodicos y version MPI (haria
+    falta halo_exchange dentro de cada matvec del CG); la tripleta y el CG no
+    cambiarian.
     """
     rhs = _poisson_divergence(arr, dx)
     return _poisson_cg(rhs, dx, n_iter)
 
 
 def electric_field(phi: jax.Array, src: EPBSourceParams, dx: float) -> jax.Array:
-    """Campo electrico efectivo E = E_0 - ∇φ, de forma (..., 3).
+    """Campo efectivo E = E_0 - grad(phi), de forma (..., 3).
 
-    Usa el gradiente FORWARD (``_grad_forward``), consistente con la divergencia
-    backward del solve: asi la correccion limpia exactamente la divergencia
-    (sin checkerboard). Solo se corrigen las componentes en el plano (E_x, E_z);
-    E_y (fuera del plano) queda en su valor de fondo E_{0y}.
+    El gradiente es el forward (G^+), el mismo del solve; usar otro gradiente
+    aca rompe la limpieza exacta de la divergencia. Solo se corrigen E_x y
+    E_z; E_y (fuera del plano) se queda en su valor de fondo.
     """
     dphidx = _grad_forward(phi, dx, axis=1)
     dphidz = _grad_forward(phi, dx, axis=0)
@@ -318,33 +294,27 @@ def electric_field(phi: jax.Array, src: EPBSourceParams, dx: float) -> jax.Array
 
 
 # --------------------------------------------------------------------------- #
-# Paso 5: solve electrostatico con CONDUCTANCIA VARIABLE (carga de capa E)     #
+# Solve electrostatico con conductancia variable (carga de la capa E)          #
 #                                                                             #
-# Fisica: la ecuacion de potencial integrada en el tubo de flujo es           #
+# Fisica: integrando en el tubo de flujo, la ecuacion del potencial es        #
 #                                                                             #
 #     div( (Sigma_F + Sigma_E) grad phi ) = div J_drive                       #
 #                                                                             #
-# con Sigma_F ~ n (conductancia Pedersen local de la region F) y Sigma_E la   #
-# conductancia de las capas E conjugadas, que actua como CORTOCIRCUITO en     #
-# paralelo: drena la carga de polarizacion a lo largo de B y DILUYE el campo  #
-# E_p por el factor de apantallamiento F_s = Sigma_F/(Sigma_F + Sigma_E).     #
-# Es el mecanismo por el que la EPB solo crece tras la puesta de sol (la capa #
-# E diurna apantalla; la nocturna no).                                        #
+# con Sigma_F ~ n (Pedersen local de la region F) y Sigma_E la conductancia   #
+# de las capas E conjugadas. La capa E es un cortocircuito en paralelo: drena #
+# la carga de polarizacion a lo largo de B y diluye el campo por el factor    #
+# F_s = Sigma_F/(Sigma_F + Sigma_E). Por eso la burbuja solo crece de noche.  #
 #                                                                             #
-# Numerica: se generaliza la tripleta consistente del Paso 4 a coeficiente    #
-# variable con sigma evaluada en CARAS (media aritmetica):                    #
-#                                                                             #
-#     L_sigma phi = D^-( sigma_{i+1/2} G^+ phi )                              #
-#                                                                             #
-# A = -L_sigma sigue siendo simetrica (sigma_f compartida por la pareja de    #
-# celdas) y semidefinida positiva para sigma > 0, asi que el MISMO CG del     #
-# Paso 4 aplica sin cambios. Con sigma uniforme = c se recupera EXACTAMENTE   #
-# phi_{Paso4}/c (shunt analitico). Normalizacion: sigma es adimensional,      #
-# sigma = Sigma_total / Sigma_ref con Sigma_ref la conductancia F de          #
-# referencia; el caso sigma = 1 reproduce el solve del Paso 4.                #
+# Numerica: la misma tripleta consistente pero con sigma evaluada en caras    #
+# (media aritmetica):  L_sigma phi = D^-( sigma_{i+1/2} G^+ phi ).            #
+# Como cada cara comparte su sigma con las dos celdas, A = -L_sigma sigue     #
+# siendo simetrica y SPD (en media cero) para sigma > 0, y el mismo CG        #
+# funciona sin tocar nada. Chequeo util: con sigma uniforme = c la solucion   #
+# es exactamente phi_cte/c. sigma va normalizada a la conductancia F de       #
+# referencia, asi que sigma = 1 reproduce el solve original.                  #
 # --------------------------------------------------------------------------- #
 
-SIGMA_FLOOR = 1e-12   # cota inferior de sigma: preserva SPD si n -> 0 (burbuja)
+SIGMA_FLOOR = 1e-12   # piso de sigma: mantiene el operador SPD si n -> 0 dentro de la burbuja
 
 
 def _face_avg(sigma: jax.Array, axis: int) -> jax.Array:
@@ -355,9 +325,8 @@ def _face_avg(sigma: jax.Array, axis: int) -> jax.Array:
 def _div_sigma_grad(phi: jax.Array, sigma: jax.Array, dx: float) -> jax.Array:
     """Operador de coeficiente variable L_sigma phi = D^-(sigma_f G^+ phi).
 
-    Reduce EXACTAMENTE a ``_laplacian`` cuando sigma = 1 (tripleta del Paso 4).
-    Simetrico (sigma de cara compartida) y definido negativo en el subespacio
-    de media cero para sigma > 0.
+    Con sigma = 1 reduce exactamente a ``_laplacian``. Simetrico (la sigma de
+    cara es compartida) y definido negativo en media cero para sigma > 0.
     """
     fx = _face_avg(sigma, 1) * _grad_forward(phi, dx, axis=1)
     fz = _face_avg(sigma, 0) * _grad_forward(phi, dx, axis=0)
@@ -366,11 +335,10 @@ def _div_sigma_grad(phi: jax.Array, sigma: jax.Array, dx: float) -> jax.Array:
 
 @partial(jax.jit, static_argnums=(3,))
 def _poisson_cg_sigma(rhs: jax.Array, sigma: jax.Array, dx: float, n_iter: int) -> jax.Array:
-    """CG para -L_sigma phi = -rhs (mismo esquema y guardas que ``_poisson_cg``).
-
-    Identica estructura: subespacio de media cero, gauge <phi> = 0 y
-    CONGELACION al converger (residual relativo < 1e-12). Se mantiene como
-    funcion separada para no tocar el kernel validado del Paso 4.
+    """CG para -L_sigma phi = -rhs. Copia de ``_poisson_cg`` con el operador
+    de coeficiente variable: mismo subespacio de media cero, mismo gauge y
+    misma congelacion al converger. La mantengo separada para no tocar el
+    kernel de coeficiente constante ya validado.
     """
     sig = jnp.maximum(sigma, SIGMA_FLOOR)
 
@@ -405,20 +373,19 @@ def _poisson_cg_sigma(rhs: jax.Array, sigma: jax.Array, dx: float, n_iter: int) 
 
 @partial(jax.jit, static_argnums=(3,))
 def solve_phi_sigma(arr: jax.Array, sigma: jax.Array, dx: float, n_iter: int) -> jax.Array:
-    """Potencial de polarizacion con conductancia variable: D^-(sigma G^+ phi) = D^- J.
+    """Potencial con conductancia variable: D^-(sigma G^+ phi) = D^- J.
 
-    Generalizacion del ``solve_phi`` del Paso 4 al cierre con carga de capa E:
-    ``sigma`` (adimensional, normalizada a la conductancia F de referencia) es
-    tipicamente  sigma = n/n_ref + R_E  con R_E = Sigma_E/Sigma_ref el shunt.
-    Garantia heredada: D^-J - L_sigma phi = residual CG ~ 0 (limpieza exacta de
-    la divergencia con la corriente corregida sigma_f G^+ phi). BC periodicas.
+    ``sigma`` es adimensional (normalizada a la conductancia F de referencia);
+    lo tipico es sigma = n/n_ref + R_E, con R_E = Sigma_E/Sigma_ref el shunt
+    de la capa E. Hereda la garantia del solve constante: D^-J - L_sigma phi =
+    residual del CG ~ 0. BC periodicas.
     """
     rhs = _poisson_divergence(arr, dx)
     return _poisson_cg_sigma(rhs, sigma, dx, n_iter)
 
 
 # --------------------------------------------------------------------------- #
-# Aplicacion explicita (solo para pruebas / diagnostico de la Fase 5)         #
+# Aplicacion explicita (solo para pruebas)                                     #
 # --------------------------------------------------------------------------- #
 
 def apply_sources_explicit(
@@ -426,11 +393,10 @@ def apply_sources_explicit(
 ):
     """Paso de fuentes Euler explicito Q <- Q + dt S(Q).
 
-    SOLO para validar el operador de fuentes y el acoplamiento de φ de forma
-    aislada. NO se usa en ``step_fn`` porque las fuentes pueden ser rigidas
-    (colisiones rapidas) y su integracion estable es responsabilidad del
-    integrador IMEX (Fase 6). El orden interno respeta la separacion:
-        solve φ  ->  E = E_0 - ∇φ  ->  S(Q)  ->  update.
+    Sirve para validar el operador de fuentes aislado, nada mas. En produccion
+    no se usa: las colisiones y la girofrecuencia son rigidas y esto explota
+    con el dt convectivo; el paso serio es ``implicit_source_solve`` via IMEX.
+    Orden interno: solve phi -> E -> S(Q) -> update.
     """
     arr = stack_state(state)
     phi = solve_phi(arr, dx, src.poisson_iters)
@@ -440,11 +406,11 @@ def apply_sources_explicit(
 
 
 # --------------------------------------------------------------------------- #
-# Solve IMPLICITO de fuentes rigidas (Fase 6 / IMEX)                           #
+# Solve implicito de las fuentes rigidas (la parte "Im" del IMEX)              #
 # --------------------------------------------------------------------------- #
 
 def _cross_matrix(Bx: float, By: float, Bz: float) -> jax.Array:
-    """Matriz K tal que K j = j × B (operador lineal del producto cruz)."""
+    """Matriz K tal que K j = j x B."""
     return jnp.array(
         [
             [0.0, Bz, -By],
@@ -458,44 +424,43 @@ def implicit_source_solve(
     state, dt: float, phys: EPBPhysParams, src: EPBSourceParams, dx: float,
     sigma: jax.Array | None = None, E_ext: jax.Array | None = None,
 ):
-    """Actualizacion IMPLICITA de las fuentes rigidas (parte ``Im`` del IMEX).
+    """Backward Euler de las fuentes rigidas (parte implicita del IMEX).
 
-    El vector fuente es AFIN en las corrientes (las densidades no se sourcean):
+    Aprovecho que S es afin en las corrientes (las densidades no se tocan):
 
         S(j) = A j + b
 
-    con (por bloque, q_i=+e, q_e=-e):
+    con bloques (q_i = +e, q_e = -e, K j = j x B):
 
         A_ion = (e/M_i) K - nu_in I
         A_ee  = -(e/M_e) K - (nu_en + nu_ei) I
-        A_ei  = -nu_ei (n_e/n_i) I            (acoplamiento electron <- ion)
+        A_ei  = -nu_ei (n_e/n_i) I        (el electron siente al ion)
 
         b_i =  e n_i g + (e^2 n_i/M_i) E + nu_in e n_i U
         b_e = -e n_e g + (e^2 n_e/M_e) E - nu_en e n_e U
 
-    donde K j = j × B. El campo E se evalua de forma LAGGED (congelada) a partir
-    del solve eliptico del estado actual: la rigidez vive en las colisiones y en
-    la girofrecuencia magnetica (parte implicita local por celda), mientras que
-    el acoplamiento electrostatico global se trata explicito. Asi, por celda se
-    resuelve el sistema lineal 6x6
+    Entonces cada celda resuelve su sistema 6x6
 
         (I - dt A) j^{n+1} = j^n + dt b
 
-    de forma vectorizada con ``jnp.linalg.solve``. La estructura es bloque-
-    triangular inferior (el ion no depende del electron), por lo que el sistema
-    esta bien condicionado para dt y frecuencias colisionales razonables.
+    vectorizado con jnp.linalg.solve. A es bloque-triangular inferior (el ion
+    no depende del electron), asi que el sistema esta bien condicionado para
+    dt razonables. Sin esto no hay forma: Omega dt >> 1 mata cualquier esquema
+    explicito, y el backward Euler es A-estable.
 
-    Paso 5: si se pasa ``sigma`` (conductancia adimensional, p.ej.
-    ``n_i/n_ref + R_E`` con el shunt de capa E), el potencial se resuelve con
-    ``solve_phi_sigma``; con ``sigma=None`` se conserva el solve del Paso 4
-    (sin cambio de comportamiento para los llamadores existentes).
+    El campo E entra congelado (lagged): se resuelve phi con el estado actual
+    y ese E se usa en b. La rigidez local queda implicita; el acoplamiento
+    electrostatico global queda explicito. Funciona porque phi evoluciona en
+    la escala lenta del transporte, no en la de las colisiones.
 
-    ``E_ext``: campo electrico TOTAL precalculado, de forma (..., 3). Si se
-    pasa, NO se resuelve phi aqui: el llamador es responsable del cierre
-    electrostatico (p.ej. el cierre drive-driven de ``plume_si_epb``, donde el
-    RHS del solve es solo la corriente motriz y no la corriente total — el
-    solve interno con J total es inestable cuando el estado ya contiene la
-    respuesta Pedersen sigma_P E^n del paso anterior).
+    Argumentos opcionales:
+      * sigma: conductancia adimensional (p.ej. n_i/n_ref + R_E). Si viene,
+        phi se resuelve con solve_phi_sigma; si no, con solve_phi de siempre.
+      * E_ext: campo TOTAL precalculado (..., 3). Si viene, aca no se resuelve
+        phi: el caller se hace cargo del cierre electrostatico. Lo necesita el
+        cierre drive-driven de plume_si_epb: alli el RHS correcto es solo la
+        corriente motriz, y resolver con la J total es inestable porque el
+        estado ya arrastra la respuesta Pedersen sigma_P E del paso anterior.
     """
     arr = stack_state(state)
     ni = arr[..., 0]
@@ -503,7 +468,7 @@ def implicit_source_solve(
     ji = arr[..., 2:5]
     je = arr[..., 5:8]
 
-    # Campo electrico lagged (acoplamiento electrostatico explicito).
+    # Campo electrico congelado en el paso (acoplamiento explicito).
     if E_ext is not None:
         E = E_ext
     elif sigma is None:

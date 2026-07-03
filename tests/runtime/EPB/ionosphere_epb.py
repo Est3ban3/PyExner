@@ -1,10 +1,10 @@
-"""Validacion del cierre ionosferico SI (camino critico, pasos 1-2).
+"""Validacion del cierre ionosferico SI (``epb_ionosphere``).
 
-Comprueba el modulo ``epb_ionosphere``: unidades fisicas SI, perfiles de fondo
-de la region F ecuatorial, operador quimico produccion/recombinacion y el
-diagnostico de tasa de crecimiento RT COLISIONAL. El objetivo es obtener
-NUMEROS CONCRETOS comparables con observaciones de EPB (tiempos de e-folding de
-~minutos, umbral de altura de aparicion).
+Comprueba unidades fisicas SI, perfiles de fondo de la region F ecuatorial,
+operador quimico produccion/recombinacion y el diagnostico de tasa de
+crecimiento RT COLISIONAL. El objetivo es sacar NUMEROS CONCRETOS comparables
+con observaciones de EPB (tiempos de e-folding de ~minutos, umbral de altura
+de aparicion).
 
 Bloques:
   A) Unidades / parametros de fondo SI (sanidad fisica de valores).
@@ -231,7 +231,7 @@ def test_growth_threshold():
 
 
 def main():
-    print("=== Validacion del cierre ionosferico SI (camino critico 1-2) ===")
+    print("=== Validacion del cierre ionosferico SI ===")
     print(f"columna {Z0/1e3:.0f}-{Z1/1e3:.0f} km, dz={DZ/1e3:.1f} km, {NZ} niveles\n")
     results = [
         test_units(),

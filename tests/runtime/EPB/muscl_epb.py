@@ -1,17 +1,18 @@
-"""Camino critico, PASO 3: transporte de 2do orden (MUSCL + HLL).
+"""Transporte de 2do orden (MUSCL + HLL) frente al 1er orden.
 
 El transporte HLL de 1er orden es demasiado difusivo: borra las plumas afiladas
-de la EPB y subestima la tasa de crecimiento RT (en el Nivel 4 dio gamma ~0.19x
-del teorico). Este script valida la reconstruccion MUSCL (limitador MC, TVD)
-frente al esquema de 1er orden en cuatro frentes:
+de la EPB y subestima la tasa de crecimiento RT (en rt_instability_epb.py dio
+gamma ~0.19x del teorico). Este script valida la reconstruccion MUSCL
+(limitador MC, TVD) frente al esquema de 1er orden en cuatro frentes:
 
   A) ORDEN de convergencia en adveccion suave: 1er orden ~1, MUSCL ~2.
   B) Difusion en un frente AFILADO (deplecion tipo pluma): MUSCL conserva mucho
      mejor la variacion total / la profundidad del hueco.
   C) POSITIVIDAD: una deplecion del 99% no produce densidades negativas (la
      reconstruccion TVD acota los valores de cara entre los vecinos).
-  D) RT en dominio doblemente periodico (Nivel 4): MUSCL acerca el crecimiento
-     al limite inercial y afila la pluma, comparado con 1er orden.
+  D) RT en dominio doblemente periodico (setup de rt_instability_epb.py): MUSCL
+     acerca el crecimiento al limite inercial y afila la pluma, comparado con
+     1er orden.
 
 Plasma frio (T_i=T_e=0) para A-C: el HLL degenera a upwind y la unica diferencia
 con la solucion exacta es la difusion del esquema, que es justo lo que medimos.
@@ -218,7 +219,7 @@ def test_positivity():
 
 
 # --------------------------------------------------------------------------- #
-# D) RT doblemente periodico: MUSCL vs 1er orden (re-uso del Nivel 4)          #
+# D) RT doblemente periodico: MUSCL vs 1er orden (setup de rt_instability)     #
 # --------------------------------------------------------------------------- #
 
 # Parametros identicos a rt_instability_epb.py (plasma frio, doblemente periodico).
@@ -334,7 +335,7 @@ def test_rt_growth():
 
 
 def main():
-    print("=== PASO 3: transporte de 2do orden (MUSCL + HLL) ===\n")
+    print("=== Transporte de 2do orden (MUSCL + HLL) ===\n")
     results = [
         test_order(),
         test_sharp_front(),

@@ -1,8 +1,8 @@
-"""Nivel 3 de validacion fisica: SUB-BLOQUES DE FUENTES con solucion analitica.
+"""Fuentes rigidas y solve electrostatico contra soluciones cerradas.
 
 Aisla cada pieza del operador de fuentes rigidas (``implicit_source_solve``) y
-del solve electrostatico (``solve_phi``) frente a soluciones cerradas, sobre
-estados uniformes (sin transporte, sin contornos). Tres bloques:
+del solve electrostatico (``solve_phi``) sobre estados uniformes (sin
+transporte, sin contornos). Tres bloques:
 
 A) GIRO MAGNETICO. Solo B (sin colisiones, sin E0, sin gravedad). La corriente
    ionica satisface, con q_i = +e, B = B \hat{y}:
@@ -195,7 +195,7 @@ def test_poisson_solve():
     ok = True
 
     # (C1) φ frente a la solucion analitica continua φ = -(1/k) cos(k x).
-    #   El solve de produccion (Paso 4) usa la tripleta compacta consistente
+    #   El solve de produccion usa la tripleta compacta consistente
     #   (div backward / grad forward / L de 5 puntos): limpieza de divergencia
     #   EXACTA a cambio de exactitud O(dx) en el campo puntual (medio celda de
     #   desfase del RHS backward). Para m=2, nx=128 eso es ~5%.
@@ -217,19 +217,14 @@ def test_poisson_solve():
     if residual > 1e-6:
         print("[FAIL] residual de Poisson demasiado grande"); ok = False
 
-    # (C3) Limpieza de divergencia con el operador CONSISTENTE del solver.
-    #   solve_phi resuelve ∇²_5pt φ = ∇·J (∇· = central_diff). La divergencia del
-    #   campo corregido es ∇·J - ∇²_5pt φ (= residual C2). La reducimos varios
-    #   ordenes frente a la divergencia original ||∇·J||.
-    #   NOTA (riesgo numerico): si en su lugar se mide ∇·(J - ∇φ) componiendo dos
-    #   derivadas centrales (∇· y ∇ de paso 2), aparece un modo "checkerboard"
-    #   residual O(1e-2) porque div∘grad(central) != laplaciano de 5 puntos. Es
-    #   el clasico desacoplamiento par/impar; para produccion conviene un
-    #   gradiente/divergencia consistentes con el laplaciano (o malla escalonada).
     # (C3) Limpieza de divergencia con la tripleta CONSISTENTE del solver.
     #   El campo corregido es J - G^+φ (G^+ = _grad_forward, consistente con la
     #   divergencia backward del solve). Su divergencia D^-(J - G^+φ) = ∇·J - ∇²φ
-    #   se anula a precision de maquina (Paso 4).
+    #   se anula a precision de maquina.
+    #   Ojo: si en su lugar se mide ∇·(J - ∇φ) componiendo dos derivadas
+    #   CENTRALES aparece un modo "checkerboard" O(1e-2), porque
+    #   div∘grad(central) != laplaciano de 5 puntos (el clasico desacoplamiento
+    #   par/impar). Por eso la tripleta consistente.
     div_orig = float(jnp.max(jnp.abs(rhs)))
     div_clean = float(jnp.max(jnp.abs(rhs - lap)))   # residual consistente
     reduction = div_clean / max(div_orig, 1e-30)
@@ -240,14 +235,14 @@ def test_poisson_solve():
 
     # (C3b) Verificacion directa del campo corregido J - G^+φ con la divergencia
     #   backward (lo que de verdad usa el momento): debe ser ~maquina. Con el
-    #   gradiente CENTRAL viejo aparecia un modo checkerboard O(1e-2); Paso 4 lo
-    #   resuelve usando grad forward consistente.
+    #   gradiente CENTRAL viejo aparecia un modo checkerboard O(1e-2); el grad
+    #   forward consistente lo elimina.
     Jx_star = Jx_field - _grad_forward(jnp.asarray(phi), dx, 1)
     Jz_star = Jz_field - _grad_forward(jnp.asarray(phi), dx, 0)
     div_consistent = float(jnp.max(jnp.abs(
         _div_backward(Jx_star, dx, 1) + _div_backward(Jz_star, dx, 0))))
     print(f"[C poisson] ||D^-(J - G^+φ)|| (campo corregido) = {div_consistent:.3e} "
-          f"(checkerboard del Nivel 3 RESUELTO)")
+          f"(sin checkerboard)")
     if div_consistent > 1e-6:
         print("[FAIL] el campo corregido no es divergente-libre consistente"); ok = False
 
@@ -257,7 +252,7 @@ def test_poisson_solve():
 
 
 if __name__ == "__main__":
-    print("=== Nivel 3: sub-bloques de fuentes (solucion analitica) ===\n")
+    print("=== Sub-bloques de fuentes (solucion analitica) ===\n")
     results = []
     results.append(test_magnetic_gyration()); print()
     results.append(test_collisional_decay()); print()

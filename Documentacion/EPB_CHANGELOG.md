@@ -38,11 +38,55 @@ Tres piezas estrictamente desacopladas:
 |---|---|---|
 | 1 | Generalización mínima del framework para estados no hidráulicos | **Completada** |
 | 2 | Alta de rama `EPB_TwoFluid` (estado + solver bundle) | **Completada** |
-| 3 | Slice hiperbólico puro ($\mathbf{F}, \mathbf{G}$ + ondas + $\Delta t$) | Pendiente |
-| 4 | Contornos transmisivos e I/O para los 8 campos | Pendiente |
-| 5 | Operador de fuentes rígidas + solve elíptico de $\phi$ | Pendiente |
-| 6 | Integrador IMEX (explícito transporte / implícito fuentes) | Pendiente |
-| 7 | Validación incremental | Pendiente |
+| 3 | Slice hiperbólico puro ($\mathbf{F}, \mathbf{G}$ + ondas + $\Delta t$) | **Completada** |
+| 4 | Contornos transmisivos e I/O para los 8 campos | **Completada** |
+| 5 | Operador de fuentes rígidas + solve elíptico de $\phi$ | **Completada** |
+| 6 | Integrador IMEX (explícito transporte / implícito fuentes) | **Completada** |
+| 7 | Validación incremental | **Completada** |
+
+---
+
+## Estado actual — índice maestro (verificado 2026-06-18)
+
+Mapa **único y autoritativo** de lo que está hecho y validado. Cada fila se
+reproduce ejecutando su script (todos PASAN hoy). Las derivaciones, modelos y
+«honestidad científica» de cada item están en su sección detallada más abajo.
+
+| Capa | Componente | Kernel(s) | Script de validación | Estado | Resultado clave (verificado) |
+|---|---|---|---|---|---|
+| Fases 1–7 | Framework + rama `EPB_TwoFluid` (estado, solver, IMEX, I/O) | `epb_twofluid.py`, `epb_sources.py` + registries | `tests/solvers/test_epb_twofluid.py` | ✅ | 7/7 passed |
+| Nivel 1 | Smoke end-to-end (driver completo) | solver bundle | `smoke_epb.py` | ✅ | SMOKE TEST PASSED |
+| Nivel 2 | Advección pura (signos, orden, masa) | `epb_twofluid.py` | `advection_epb.py` | ✅ | 3/3 PASS; orden ~1 (upwind) |
+| Nivel 3 | Fuentes (giro magnético, colisiones, Poisson) | `epb_sources.py` | `sources_epb.py` | ✅ | 3/3 OK |
+| Nivel 4 | RT no lineal adimensional | `epb_twofluid.py`, `epb_sources.py` | `rt_instability_epb.py` | ✅ | γ=0.426; contraste 10.4× |
+| Paso 1–2 | Cierre SI + perfiles + química | `epb_ionosphere.py` | `ionosphere_epb.py` | ✅ | umbral ~252 km; e-fold 15–28 min |
+| Paso 3 | Transporte 2º orden (MUSCL + SSP-RK2) | `epb_twofluid.py` | `muscl_epb.py` | ✅ | orden L1 1.66; γ MUSCL ×3.96 vs 1er orden |
+| Paso 4 | `solve_phi` consistente ($D^-G^+{=}L_{5pt}$) + CG | `epb_sources.py` | `poisson_epb.py` | ✅ | checkerboard resuelto; TODAS PASARON |
+| Paso 5 | Capa E como carga (σ-variable, $L_\sigma$ SPD) | `epb_sources.py`, `epb_ionosphere.py` | `elayer_epb.py` | ✅ | shunt ×177; γ cruza el umbral |
+| Paso 6 | Geometría flux-tube dipolar | `epb_fluxtube.py` | `fluxtube_epb.py` | ✅ | umbral ~300 km; τ=25.8 min; día ×6.5 |
+| Paso 7 | Disparador PRE + onset | `epb_pre.py` | `pre_onset_epb.py` | ✅ | onset 19.93 LT; control 0.36 vs 15.6 e-folds |
+| Adendo | Pluma SI 2D no lineal (cierre drive-driven) | `epb_sources.py` (`E_ext`) | `plume_si_epb.py` | ✅ | pluma→topside ~600 km; v~250 m/s |
+| Figuras | Síntesis gráfica Pasos 1-2/6/7 + morfología | — | `plot_epb.py` (fig1–4), `plume_si_epb.py` (fig5) | ✅ | `figures/fig1…5.png` |
+
+**Reproducir todo** (venv activo; MPI GPU-aware desactivado en WSL):
+
+```bash
+export MPIR_CVAR_ENABLE_GPU=0
+cd tests/runtime/EPB
+for s in advection sources ionosphere muscl poisson elayer fluxtube pre_onset rt_instability smoke; do
+  python ${s}_epb.py
+done
+python plume_si_epb.py   # corrida 2D SI lenta -> figures/fig5_pluma_si.png
+python plot_epb.py       # figures/fig1..4
+```
+
+> **Sobre los números por paso.** Las tablas «Resultados» de cada sección son
+> instantáneas **al cierre de ese paso**. Pasos posteriores que tocan código
+> compartido cambian ligeramente los valores al re-ejecutar (sin romper ningún
+> test): p.ej. el bloque D de `muscl_epb.py` daba γ 0.105→0.531 (×5) al cerrar
+> el Paso 3 y hoy da 0.157→0.623 (×3.96) porque el Paso 4 reescribió `solve_phi`
+> (el campo $E$ que alimenta esa prueba). El estado **vigente** es esta tabla;
+> las de cada sección son históricas.
 
 ---
 
@@ -1032,7 +1076,11 @@ esto da el UMBRAL DE ALTURA de aparicion de la EPB.
   arrays broadcastables) y se valida directamente; el cableado al `source_fn`
   (con $\nu_{in}(h)$, $\beta(h)$ resueltos como campos) es el siguiente paso.
 
-### Estado del camino critico hacia EPB cuantitativa
+### Estado del camino critico hacia EPB cuantitativa (snapshot al cierre del Paso 2)
+
+> **Estado VIGENTE: ver «Estado actual — índice maestro» al inicio.** Las
+> casillas de abajo reflejan el progreso *en el momento de cerrar este paso*
+> (Pasos 3–7 ya están completos hoy).
 
 - [x] **Paso 1** — Unidades fisicas SI + parametros de fondo de region F.
 - [x] **Paso 2** — Perfiles de altura + produccion/recombinacion (quimica).
@@ -1102,6 +1150,11 @@ pasos Euler TVD → restaura estabilidad y positividad para CFL $\le1$.
   difusion del transporte de 1er orden. MUSCL lo multiplica por $5$
   ($0.105\to0.53$) y la amplitud crece $\times947$ vs $\times9.6$: la pluma RT
   se DESARROLLA en vez de difuminarse.
+- **Nota (re-ejecución post-Paso 4).** Al re-correr hoy `muscl_epb.py`, el
+  bloque D da $0.157\to0.623$ ($\times3.96$) en vez de $0.105\to0.531$ ($\times5$):
+  el Paso 4 reescribió `solve_phi` (el campo $E$ que alimenta esta prueba). Los
+  bloques A/B (transporte puro) no cambian. La tabla de arriba es la instantánea
+  al cierre del Paso 3.
 
 ### Riesgos / honestidad cientifica
 
@@ -1116,7 +1169,11 @@ pasos Euler TVD → restaura estabilidad y positividad para CFL $\le1$.
 - El coste por paso ~se duplica (dos evaluaciones de flujo por SSP-RK2); en
   produccion conviene exponer el esquema como opcion del YAML.
 
-### Estado del camino critico hacia EPB cuantitativa
+### Estado del camino critico hacia EPB cuantitativa (snapshot al cierre del Paso 3)
+
+> **Estado VIGENTE: ver «Estado actual — índice maestro» al inicio.** Las
+> casillas de abajo reflejan el progreso *en el momento de cerrar este paso*
+> (Pasos 4–7 ya están completos hoy).
 
 - [x] **Paso 1** — Unidades fisicas SI + parametros de fondo de region F.
 - [x] **Paso 2** — Perfiles de altura + produccion/recombinacion (quimica).
@@ -1223,7 +1280,11 @@ Combinar con MUSCL (Paso 3) deberia acercar mas $\gamma$ al regimen no lineal.
   requiere $E$ de 2do orden, una malla escalonada real (MAC) lo da sin perder
   consistencia.
 
-### Estado del camino critico hacia EPB cuantitativa
+### Estado del camino critico hacia EPB cuantitativa (snapshot al cierre del Paso 4)
+
+> **Estado VIGENTE: ver «Estado actual — índice maestro» al inicio.** Las
+> casillas de abajo reflejan el progreso *en el momento de cerrar este paso*
+> (Pasos 5–7 ya están completos hoy).
 
 - [x] **Paso 1** — Unidades fisicas SI + parametros de fondo de region F.
 - [x] **Paso 2** — Perfiles de altura + produccion/recombinacion (quimica).

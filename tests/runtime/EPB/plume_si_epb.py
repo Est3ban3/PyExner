@@ -1,15 +1,15 @@
 """Pluma EPB en unidades FISICAS (SI): la figura clasica altitud vs zonal.
 
 Corrida 2D no lineal del modelo completo (transporte MUSCL + fuentes rigidas
-implicitas + solve sigma-variable del Paso 5 + quimica del Paso 2) sobre un
-dominio ecuatorial realista:
+implicitas + solve sigma-variable + quimica) sobre un dominio ecuatorial
+realista:
 
     distancia zonal x en [0, 400] km,   altitud z en [200, 800] km,
 
-con capa F2 Chapman ELEVADA post-PRE (h_mF2 = 450 km, escenario del Paso 7).
-Produce ``figures/fig5_pluma_si.png``: mapas de log10 n_e(x, z) en 4 instantes
-— la grafica tipica de las simulaciones de EPB (depleciones del bottomside
-ascendiendo como plumas hacia el topside).
+con capa F2 Chapman ELEVADA post-PRE (h_mF2 = 450 km, el escenario de
+pre_onset_epb.py). Produce ``figures/fig5_pluma_si.png``: mapas de
+log10 n_e(x, z) en 4 instantes — la grafica tipica de las simulaciones de EPB
+(depleciones del bottomside ascendiendo como plumas hacia el topside).
 
 --- Por que es viable en SI (sin el CFL electronico) ---
 
@@ -24,7 +24,7 @@ dt queda limitado solo por el CFL de las derivas: dt ~ 2-6 s.
 --- Cierre electrostatico (clave dimensional y de estabilidad) ---
 
 El potencial es DIAGNOSTICO de la densidad (cierre tipo Ossakow): el RHS del
-solve sigma-variable del Paso 5 es SOLO la corriente motriz (gravitacional),
+solve sigma-variable es SOLO la corriente motriz (gravitacional),
 no la corriente total del estado:
 
     div( sigma_P grad phi ) = div J_g ,   J_g = (n M_i g / B) x_hat ,
@@ -47,7 +47,7 @@ transporte de n (gamma_RT ~ 1e-2 s^-1 << 1/dt): estable.
 
 - nu_in ESCALAR (valor del bottomside, ~0.05 s^-1 a ~420 km): exagera la
   friccion en el topside (pluma algo lenta arriba); nu_in(z) como campo en el
-  solve implicito es el pendiente documentado del Paso 2.
+  solve implicito queda pendiente.
 - BC periodicas en x (fisico: onda zonal) y en z (artificio): el wrap
   topside->bottomside es estable RT (denso abajo en ambos lados del wrap) y
   la quimica ancla el fondo; la ventana de interes queda lejos de los bordes.
@@ -88,12 +88,12 @@ os.makedirs(OUT, exist_ok=True)
 
 Z0, Z1 = 200.0e3, 800.0e3          # altitud [m]
 LX = 400.0e3                       # extension zonal [m]
-NX = 96
+NX = 768
 DX = LX / NX                       # 4166.7 m
 NZ = int(round((Z1 - Z0) / DX))    # 144  ->  LZ = 600 km exacto
 
 # --------------------------------------------------------------------------- #
-# Fondo ionosferico: capa ELEVADA post-PRE (escenario de disparo del Paso 7)   #
+# Fondo ionosferico: capa ELEVADA post-PRE (escenario de pre_onset_epb.py)     #
 # --------------------------------------------------------------------------- #
 
 FR = FRegionParams(h_peak=450.0e3)
@@ -108,7 +108,7 @@ NU_EN = 0.005
 PHYS = EPBPhysParams(e=SI_CONST.e, kB=SI_CONST.kB, Mi=M_OPLUS,
                      Me=SI_CONST.Me, Ti=0.0, Te=0.0)        # plasma FRIO
 SRC = EPBSourceParams(gz=-G0, By=B0, nu_in=NU_IN, nu_en=NU_EN,
-                      poisson_iters=400)
+                      poisson_iters=800)
 
 N_REF = FR.n_max
 N_HARD = 1.0e-3 * FR.n_max         # piso DURO post-transporte (positividad MUSCL)

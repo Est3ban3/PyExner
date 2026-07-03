@@ -1,22 +1,20 @@
 # PyExner/integrators/imex.py
-"""Integrador IMEX (transporte explicito + fuentes rigidas implicitas).
+"""Integrador IMEX: transporte explicito + fuentes rigidas implicitas.
 
-FASE 6 — Introduce un integrador de tipo IMEX como rama adicional del framework,
-reutilizando el MISMO contrato de ejecucion (configuracion, bucle temporal,
-escritura de salida) que ``Forward Euler``.
+Mismo contrato de ejecucion que Forward Euler (config, bucle temporal,
+escritura de salida); lo unico nuevo es que despues del step explicito llama
+al source_fn del solver, si existe.
 
-Razon numerica: el paso hiperbolico esta gobernado por velocidades de onda
-(CFL convectivo), mientras que las fuentes locales (colisiones, girofrecuencia
-magnetica) pueden ser mucho mas rapidas. Integrarlas de forma explicita
-obligaria a un dt diminuto o seria directamente inestable. El IMEX resuelve:
+Por que hace falta: el dt lo fija el CFL convectivo, pero las fuentes locales
+(colisiones, girofrecuencia) pueden ser mucho mas rapidas. Integrarlas
+explicito obligaria a un dt ridiculo o directamente explota. Entonces:
 
-    1. Transporte EXPLICITO (``step_fn`` del solver: flujos HLL + halo + BC).
-    2. Fuentes IMPLICITAS (``source_fn`` del solver: algebra local por celda
-       (I - dt A) j = j + dt b, con E lagged del solve eliptico).
+    1. transporte explicito   (step_fn: HLL + halos + contornos)
+    2. fuentes implicitas     (source_fn: (I - dt A) j = j + dt b por celda)
 
-Es un splitting de Lie de primer orden, consistente con el dt convectivo del
-``compute_dt_fn``. Si el ``SolverBundle`` no define ``source_fn`` (ramas
-hidraulicas), el IMEX se reduce exactamente a Forward Euler.
+Es un splitting de Lie de primer orden, consistente con el dt del
+compute_dt_fn. Si el bundle no define source_fn (ramas hidraulicas), esto se
+reduce exactamente a Forward Euler, asi que registrarlo no rompe nada.
 """
 
 from PyExner.utils.constants import TIMESTEP_TOL
@@ -60,10 +58,8 @@ def cond_fn(simstate):
 
 
 def _imex_step(solver_bundle, state, time, dt, mask, solver_config):
-    """Un paso IMEX: transporte explicito seguido de fuentes implicitas."""
-    # Parte explicita (Ex): transporte hiperbolico + halo + contornos.
+    """Un paso IMEX: transporte explicito y despues fuentes implicitas."""
     state = solver_bundle.step_fn(state, time, dt, mask, solver_config)
-    # Parte implicita (Im): fuentes rigidas locales (si el solver las define).
     if solver_bundle.source_fn is not None:
         state = solver_bundle.source_fn(state, time, dt, mask, solver_config)
     return state

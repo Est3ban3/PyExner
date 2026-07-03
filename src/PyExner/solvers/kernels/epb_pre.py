@@ -1,42 +1,39 @@
-"""Paso 7 del camino critico: disparador PRE — E_0(t) con ciclo diurno.
+# PyExner/solvers/kernels/epb_pre.py
+"""Disparador PRE: campo de fondo E_0(t) con ciclo diurno y prediccion de onset.
 
-Cierra la cadena causal completa de la EPB:
+Cierra la cadena causal de la EPB:
 
-    PRE (E_0 hacia el este al atardecer)  ->  la capa F SUBE (E x B)
-    + la capa E conjugada RECOMBINA       ->  F_s -> 1 (sin apantallamiento)
-    => gamma_FT(t) > 0 y la amplificacion acumulada int gamma dt alcanza el
-       nivel no lineal  =>  ONSET de la burbuja (hora local predicha).
+    PRE (E_0 hacia el este al atardecer) -> la capa F sube (E x B)
+    + la capa E conjugada recombina      -> F_s -> 1
+    => gamma_FT(t) > 0, el crecimiento acumulado int gamma dt llega al nivel
+       no lineal => onset (hora local predicha).
 
---- Modelo empirico del drift vertical (tipo Fejer/Scherliess, dia calmo) ---
+Drift vertical empirico tipo Fejer/Scherliess (dia calmo):
 
-    V(t) = V_day cos(2 pi (t - 12)/24) + V_pre exp(-(t - t_pre)^2 / 2 w^2)
+    V(t) = V_day cos(2 pi (t-12)/24) + V_pre exp(-(t-t_pre)^2 / 2 w^2)
 
-Sinusoide diurna (sube de dia, baja de noche, amplitud ~20 m/s) + pico PRE
-gaussiano (~30 m/s extra centrado en ~18:45 LT, anchura ~0.5 h). El campo
-electrico de fondo asociado es E_0x(t) = B V(t) (E hacia el este => deriva
-E x B hacia arriba, con B = B y_hat).
+sinusoide diurna (~20 m/s) + pico PRE gaussiano (~30 m/s extra cerca de
+18:45 LT). El campo asociado es E_0x = B V (E hacia el este => deriva E x B
+hacia arriba, con B = B y_hat).
 
---- Decaimiento de la capa E al atardecer ---
-
-La capa E muere por recombinacion disociativa rapida al cortarse la
-fotoionizacion. Se modela con una transicion logistica en hora local:
+La capa E muere al atardecer (recombinacion disociativa sin fotoionizacion);
+lo modelo con una logistica en hora local:
 
     n_E(t) = n_night + (n_day - n_night) / (1 + exp((t - t_sunset)/tau_E))
 
---- Trayectoria de la capa y crecimiento acumulado ---
+Trayectoria y crecimiento acumulado:
 
-    dh_peak/dt = V(t)                  (subida E x B del pico F2)
-    gamma(t)   = max_{bottomside} gamma_FT(h_apex; h_peak(t), n_E(t))
-    Gamma(t)   = int_{t0}^{t} max(gamma, 0) dt'
+    dh_peak/dt = V(t)
+    gamma(t)   = max_bottomside gamma_FT(h_apex; h_peak(t), n_E(t))
+    Gamma(t)   = int max(gamma, 0) dt'
 
-Criterio de onset: la RT lineal amplifica una semilla del ~0.1% hasta el nivel
-no lineal (orden 1) cuando Gamma >= ln(10^3) ~ 6.9 e-folds (criterio estandar
-de los analisis tipo Sultan/Huba). La hora local en que se cruza es la
-PREDICCION DEL ONSET, comparable con la ocurrencia observada (19:30-22 LT).
+Criterio de onset: Gamma >= ln(10^3) ~ 6.9 e-folds, o sea una semilla del
+0.1% amplificada a orden 1 (el criterio usual en los analisis tipo
+Sultan/Huba). La hora en que se cruza es la prediccion, comparable con la
+ocurrencia observada (19:30-22 LT).
 
-NOTA: modulo HOST-SIDE (NumPy), como ``epb_fluxtube``: es el cierre/forzante
-lento (escala de horas) que alimenta a los kernels JAX (E0x(t), R_E(t), perfiles)
-— no vive en el lazo temporal jiteado.
+Host-side (NumPy), igual que epb_fluxtube: es el forzante lento (horas) que
+alimenta E0x(t), R_E(t) y perfiles a los kernels JAX; no va en el lazo jiteado.
 """
 
 import math
@@ -55,11 +52,11 @@ from PyExner.solvers.kernels.epb_fluxtube import (
 # --------------------------------------------------------------------------- #
 
 class PREParams(NamedTuple):
-    """Ciclo diurno del drift vertical + PRE + decaimiento de la capa E.
+    """Ciclo diurno del drift + PRE + decaimiento de la capa E.
 
-    Valores tipicos de epoca de alta ocurrencia (equinoccio, F10.7 moderado),
-    rangos observados: drift diurno ~20-30 m/s, pico PRE ~20-60 m/s en
-    ~18:30-19:30 LT (Fejer et al.).
+    Valores tipicos de epoca de alta ocurrencia (equinoccio, F10.7 moderado):
+    drift diurno ~20-30 m/s, pico PRE ~20-60 m/s en ~18:30-19:30 LT (rangos
+    de Fejer et al.).
     """
     V_day: float = 20.0          # amplitud de la sinusoide diurna [m/s]
     V_pre: float = 30.0          # amplitud extra del PRE [m/s]
@@ -96,11 +93,11 @@ def elayer_density(t_lt, p: PREParams = PREParams()):
 
 def layer_height(t_lt, h0: float, t0: float, p: PREParams = PREParams(),
                  h_floor: float = 200.0e3):
-    """Trayectoria del pico F2: h(t) = h0 + int_{t0}^{t} V dt' (trapecio).
+    """Trayectoria del pico F2: h(t) = h0 + int V dt' (trapecio).
 
-    ``t_lt`` debe ser una malla creciente que empieza en t0. La capa no baja de
-    ``h_floor`` (la quimica detiene el descenso nocturno: a baja altura la
-    recombinacion erosiona el bottomside, no lo desplaza).
+    t_lt debe ser una malla creciente que arranca en t0. La capa no baja de
+    h_floor: de noche la quimica erosiona el bottomside en vez de seguir
+    bajandolo.
     """
     t = np.asarray(t_lt, dtype=float)
     V = vertical_drift(t, p)                       # [m/s]
@@ -131,13 +128,12 @@ def onset_prediction(p: PREParams = PREParams(),
                      el: ELayerParams = ELAYER_NIGHT,
                      t0: float = 16.0, t1: float = 26.0, dt_lt: float = 2.0 / 60.0,
                      h0: float = 330.0e3, nlat: int = 401) -> PRENightcast:
-    """Integra la tarde-noche y predice la hora local del onset de la EPB.
+    """Integra la tarde-noche y predice la hora local del onset.
 
     En cada instante se reconstruye el perfil F con el pico desplazado
-    (``fr.h_peak = h(t)``: subida rigida por E x B, forma Chapman conservada,
-    aproximacion estandar) y la capa E con su pico decayendo (``n_E(t)``);
-    ``gamma_bottomside_max`` del Paso 6 da el gamma del perfil. El onset es el
-    cruce de Gamma con ``GROWTH_THRESHOLD``.
+    (subida rigida por E x B, la forma Chapman se conserva: aproximacion
+    estandar) y la capa E con su pico decayendo; gamma_bottomside_max da el
+    gamma del perfil. El onset es el cruce de Gamma con GROWTH_THRESHOLD.
     """
     t = np.arange(t0, t1 + 1e-9, dt_lt)
     V = vertical_drift(t, p)
