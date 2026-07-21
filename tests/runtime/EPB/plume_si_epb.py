@@ -88,7 +88,7 @@ os.makedirs(OUT, exist_ok=True)
 
 Z0, Z1 = 200.0e3, 800.0e3          # altitud [m]
 LX = 400.0e3                       # extension zonal [m]
-NX = 768
+NX = 384
 DX = LX / NX                       # 4166.7 m
 NZ = int(round((Z1 - Z0) / DX))    # 144  ->  LZ = 600 km exacto
 
@@ -108,16 +108,18 @@ NU_EN = 0.005
 PHYS = EPBPhysParams(e=SI_CONST.e, kB=SI_CONST.kB, Mi=M_OPLUS,
                      Me=SI_CONST.Me, Ti=0.0, Te=0.0)        # plasma FRIO
 SRC = EPBSourceParams(gz=-G0, By=B0, nu_in=NU_IN, nu_en=NU_EN,
-                      poisson_iters=800)
+                      poisson_iters=1600)
 
 N_REF = FR.n_max
 N_HARD = 1.0e-3 * FR.n_max         # piso DURO post-transporte (positividad MUSCL)
+
 # Piso de conductividad: en 2D local sigma_P -> 0 dentro de la deplecion
 # amplifica E sin cota (v ~ (n_bg/n_piso) g/nu_in: con piso 2% se midieron
 # ~2 km/s y turbulencia saturada). En 3D la conductancia INTEGRADA del tubo
 # (topside + capa E conjugada) acota esa amplificacion; el piso al 25% de
 # n_max es su sustituto 2D y limita v_burbuja a ~2-4 x g/nu_in ~ 400 m/s,
 # el rango observado (100-500 m/s).
+
 SIGMA_MIN = float(pedersen_conductivity(0.25 * FR.n_max, NU_IN, B0))
 
 # Difusion sub-grid en continuidad: en el limite RT local gamma ~ g/(nu Ln)
@@ -125,6 +127,7 @@ SIGMA_MIN = float(pedersen_conductivity(0.25 * FR.n_max, NU_IN, B0))
 # plumas y el RHS centrado no les genera respuesta de phi (aniquila Nyquist).
 # D ~ 0.15 v_ref dx corta la rejilla (tau_grid ~ 15 s) con Peclet ~ 500 en
 # la escala de las plumas (~50 km): estandar en codigos EPB (tipo Zalesak).
+
 V_REF = G0 / NU_IN                                   # ~173 m/s
 D_NUM = 0.15 * V_REF * (LX / NX)                     # ~1.1e5 m^2/s
 
@@ -213,8 +216,10 @@ def step(s, dt):
     s = s.replace(n_i=n_i, n_e=n_e)
     n = 0.5 * (n_i + n_e)
     sigma = jnp.maximum(pedersen_conductivity(n, NU_IN, B0), SIGMA_MIN)
+
     # Drive gravitacional J_g = (n M_i g / B) x_hat; divergencia centrada
     # (= D^- aplicado a la media de caras, consistente con L_sigma).
+    
     Jg = n * (PHYS.Mi * G0 / B0)
     rhs = (jnp.roll(Jg, -1, axis=1) - jnp.roll(Jg, 1, axis=1)) / (2.0 * DX)
     phi = _poisson_cg_sigma(rhs, sigma, DX, SRC.poisson_iters)
